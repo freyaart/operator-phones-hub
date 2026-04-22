@@ -1,15 +1,5 @@
 import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-import { phonesRouter } from './api/phones.js';
-
-const app = new Hono();
-
-app.use('/*', cors({ origin: '*' }));
-
-app.get('/health', (c) => c.json({ ok: true, service: 'operator-phones-hub' }));
-
-app.route('/api', phonesRouter);
+import { app } from './app.js';
 
 const port = Number(process.env.PORT || 8787);
 
