@@ -1,0 +1,31 @@
+{
+  "name": "operator-phones-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phone catalog + SI operator prices sync + HTTP API",
+  "type": "module",
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "seed": "tsx src/scripts/seed.ts",
+    "sync": "tsx src/scripts/sync.ts",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.1",
+    "@prisma/client": "^6.3.1",
+    "hono": "^4.6.19"
+  },
+  "devDependencies": {
+    "prisma": "^6.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

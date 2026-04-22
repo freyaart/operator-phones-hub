@@ -1,0 +1,99 @@
+{
+  "phones": [
+    {
+      "brand": "Apple",
+      "series": "iPhone 15 Pro",
+      "storageGb": 256,
+      "slug": "apple-iphone-15-pro-256",
+      "details": { "importSource": "data/phones.json" },
+      "specs": {
+        "market": "SI",
+        "dimensions": { "heightMm": 146.6, "widthMm": 70.6, "depthMm": 8.25, "weightG": 187 },
+        "display": {
+          "diagonalInch": 6.1,
+          "resolutionPx": { "width": 2556, "height": 1179 },
+          "panelType": "LTPO OLED",
+          "refreshRateHz": 120,
+          "peakBrightnessNits": 2000,
+          "hdr": ["HDR10", "Dolby Vision"],
+          "protection": ["Ceramic Shield"],
+          "alwaysOn": true
+        },
+        "performance": {
+          "chipset": "Apple A17 Pro",
+          "ramGb": 8,
+          "storageType": "NVMe",
+          "esim": true,
+          "simSlots": 1,
+          "usb": "USB-C (USB 3)",
+          "wifi": "Wi‑Fi 6E",
+          "bluetooth": "5.3",
+          "nfc": true,
+          "uwb": true
+        },
+        "cameras": {
+          "rear": [
+            { "role": "wide", "mp": 48, "aperture": "f/1.78", "ois": true },
+            { "role": "ultrawide", "mp": 12, "aperture": "f/2.2" },
+            { "role": "tele 3x", "mp": 12, "aperture": "f/2.8", "ois": true }
+          ],
+          "front": { "mp": 12, "aperture": "f/1.9", "autofocus": true },
+          "video": { "maxResolutionLabel": "4K", "maxFps": 60, "hdrModes": ["Dolby Vision"] }
+        },
+        "battery": { "wiredChargeW": 20, "wirelessChargeW": 15, "reverseWireless": true },
+        "software": { "os": "iOS", "osVersionAtLaunch": "17" },
+        "network": { "cellular": "5G (sub‑6)", "fiveG": true },
+        "build": {
+          "frameMaterial": "Titanium",
+          "backMaterial": "Textured matte glass",
+          "ipRating": "IP68",
+          "colors": ["Natural Titanium", "Blue Titanium", "White Titanium", "Black Titanium"]
+        },
+        "biometrics": { "face": true }
+      }
+    },
+    {
+      "brand": "Apple",
+      "series": "iPhone 15",
+      "storageGb": 128,
+      "slug": "apple-iphone-15-128",
+      "details": { "importSource": "data/phones.json" },
+      "specs": {
+        "market": "SI",
+        "dimensions": { "heightMm": 147.6, "widthMm": 71.6, "depthMm": 7.8, "weightG": 171 },
+        "display": {
+          "diagonalInch": 6.1,
+          "resolutionPx": { "width": 2556, "height": 1179 },
+          "panelType": "OLED",
+          "refreshRateHz": 60,
+          "peakBrightnessNits": 2000,
+          "hdr": ["HDR10", "Dolby Vision"],
+          "protection": ["Ceramic Shield"]
+        },
+        "performance": {
+          "chipset": "Apple A16 Bionic",
+          "ramGb": 6,
+          "storageType": "NVMe",
+          "esim": true,
+          "simSlots": 1,
+          "usb": "USB-C (USB 2)",
+          "wifi": "Wi‑Fi 6",
+          "bluetooth": "5.3",
+          "nfc": true
+        },
+        "cameras": {
+          "rear": [
+            { "role": "wide", "mp": 48, "aperture": "f/1.6", "ois": true },
+            { "role": "ultrawide", "mp": 12, "aperture": "f/2.4" }
+          ],
+          "front": { "mp": 12, "aperture": "f/1.9", "autofocus": true }
+        },
+        "battery": { "wiredChargeW": 20, "wirelessChargeW": 15, "reverseWireless": true },
+        "software": { "os": "iOS", "osVersionAtLaunch": "17" },
+        "network": { "fiveG": true },
+        "build": { "frameMaterial": "Aluminum", "backMaterial": "Color‑infused glass", "ipRating": "IP68" },
+        "biometrics": { "face": true }
+      }
+    }
+  ]
+}

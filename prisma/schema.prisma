@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Canonical handset (one row per market variant you care about, e.g. storage SKU).
+model PhoneModel {
+  id        String   @id @default(cuid())
+  brand     String
+  /// Display name without storage, e.g. "iPhone 15 Pro"
+  series    String
+  /// Nullable when model is "single SKU"
+  storageGb Int?
+  /// URL-safe unique key, e.g. "apple-iphone-15-pro-256"
+  slug      String   @unique
+  /// Structured technical data for comparison tables (see `PhoneTechnicalSpecs` in src).
+  specs     Json?
+  /// Non-technical metadata: internal SKUs, import source, Wave/Foxway ids, editorial notes.
+  details   Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  offers OperatorOffer[]
+
+  @@index([brand, series])
+}
+
+/// Latest scraped row per (phone, operator). Re-sync overwrites the same row.
+model OperatorOffer {
+  id               String     @id @default(cuid())
+  phoneModelId     String
+  phoneModel       PhoneModel @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
+  /// a1 | telekom | t2 | telemach
+  operator         String
+  retailPriceEur   Float?
+  monthlyEur       Float?
+  contractLabel    String?
+  tradeInAvailable Boolean?
+  productUrl       String?
+  /// Raw fragment from the page or API for debugging / re-parsing.
+  raw              Json?
+  syncedAt         DateTime   @default(now())
+
+  @@unique([phoneModelId, operator])
+  @@index([operator])
+}
