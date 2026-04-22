@@ -1,28 +1,35 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateTable
 CREATE TABLE "PhoneModel" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "brand" TEXT NOT NULL,
     "series" TEXT NOT NULL,
     "storageGb" INTEGER,
     "slug" TEXT NOT NULL,
-    "details" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
+    "specs" JSONB,
+    "details" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PhoneModel_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "OperatorOffer" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "phoneModelId" TEXT NOT NULL,
     "operator" TEXT NOT NULL,
-    "retailPriceEur" REAL,
-    "monthlyEur" REAL,
+    "retailPriceEur" DOUBLE PRECISION,
+    "monthlyEur" DOUBLE PRECISION,
     "contractLabel" TEXT,
     "tradeInAvailable" BOOLEAN,
     "productUrl" TEXT,
-    "raw" TEXT,
-    "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "OperatorOffer_phoneModelId_fkey" FOREIGN KEY ("phoneModelId") REFERENCES "PhoneModel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    "raw" JSONB,
+    "syncedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "OperatorOffer_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -36,3 +43,7 @@ CREATE INDEX "OperatorOffer_operator_idx" ON "OperatorOffer"("operator");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "OperatorOffer_phoneModelId_operator_key" ON "OperatorOffer"("phoneModelId", "operator");
+
+-- AddForeignKey
+ALTER TABLE "OperatorOffer" ADD CONSTRAINT "OperatorOffer_phoneModelId_fkey" FOREIGN KEY ("phoneModelId") REFERENCES "PhoneModel"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
