@@ -12,6 +12,7 @@
     "db:studio": "npx prisma studio",
     "seed": "tsx src/scripts/seed.ts",
     "sync": "tsx src/scripts/sync.ts",
+    "discover": "tsx src/scripts/discover-models.ts",
     "playwright:install": "npx playwright install chromium",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
