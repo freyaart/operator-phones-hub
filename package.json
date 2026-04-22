@@ -12,6 +12,7 @@
     "db:studio": "npx prisma studio",
     "seed": "tsx src/scripts/seed.ts",
     "sync": "tsx src/scripts/sync.ts",
+    "playwright:install": "npx playwright install chromium",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc"
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "playwright": "^1.49.1",
     "prisma": "^6.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
