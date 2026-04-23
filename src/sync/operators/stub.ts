@@ -8,12 +8,11 @@ import type { OfferPayload } from '../upsertOffer.js';
 export async function stubFetchOffer(
   _operator: OperatorId,
   ctx: { brand: string; series: string; storageGb: number | null; slug: string }
-): Promise<OfferPayload> {
+): Promise<Partial<OfferPayload>> {
   void ctx;
   return {
     retailPriceEur: null,
     monthlyEur: null,
-    contractLabel: null,
     tradeInAvailable: null,
     productUrl: null,
     raw: { note: 'stub — implement scraper in src/sync/operators/<operator>.ts' },

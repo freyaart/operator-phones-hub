@@ -1,20 +1,25 @@
 /**
- * Discover handset SKUs from operator listings and upsert into `PhoneModel`.
+ * Discover canonical phone models plus operator-specific catalog items.
  *
  *   npm run discover
  *   npm run discover -- --sources=telekom
  *   npm run discover -- --dry-run
- *
- * Requires: `npm run playwright:install` and `DATABASE_URL` in `.env`
  */
 import { chromium } from 'playwright';
 import { prisma } from '../db.js';
-import { parseCatalogSlug } from '../discovery/parse-catalog-slug.js';
-import { collectTelekomMobitelUrls } from '../discovery/collect-telekom.js';
-import { collectA1TelefoniPaths } from '../discovery/collect-a1.js';
+import { collectTelekomCatalogItems } from '../discovery/collect-telekom.js';
+import { collectA1CatalogItems } from '../discovery/collect-a1.js';
+import { collectT2CatalogItems } from '../discovery/collect-t2.js';
+import { collectTelemachCatalogItems } from '../discovery/collect-telemach.js';
 import { mergeDiscoveryDetails } from '../discovery/merge-details.js';
+import type { CatalogDiscoveryItem } from '../discovery/types.js';
+import { upsertPhoneModelWithSpec } from '../models/upsert-phone-model.js';
+import { beginScrapeRun, finishScrapeRun, addScrapeArtifact } from '../scrape/run-log.js';
+import { upsertOperatorCatalogItem } from '../sync/upsert-catalog-item.js';
 
 function arg(name: string): string | undefined {
+  const exact = process.argv.find((value) => value.startsWith(`${name}=`));
+  if (exact) return exact.slice(name.length + 1);
   const i = process.argv.indexOf(name);
   if (i === -1) return undefined;
   return process.argv[i + 1];
@@ -24,84 +29,115 @@ function hasFlag(f: string): boolean {
   return process.argv.includes(f);
 }
 
-function telekomSlugFromUrl(url: string): string | null {
-  const m = url.match(/\/mobiteli\/p\/([^/?#]+)/i);
-  return m ? m[1].toLowerCase() : null;
-}
-
-function a1SlugFromPath(path: string): string | null {
-  const m = path.match(/^\/telefoni\/([^/?#]+)/i);
-  return m ? m[1].toLowerCase() : null;
-}
-
-async function upsertFromTelekomUrl(url: string, dryRun: boolean) {
-  const seg = telekomSlugFromUrl(url);
-  if (!seg) return;
-  const parsed = parseCatalogSlug(seg);
+async function upsertDiscoveredItem(item: CatalogDiscoveryItem, dryRun: boolean, scrapeRunId: string | null) {
   if (dryRun) {
-    console.log('[telekom]', parsed.slug, '→', parsed.brand, parsed.series, parsed.storageGb);
+    console.log(
+      `[${item.operator}]`,
+      item.canonicalSlug,
+      '→',
+      item.brand,
+      item.series,
+      item.storageGb,
+      item.color ?? '',
+    );
     return;
   }
-  const existing = await prisma.phoneModel.findUnique({ where: { slug: parsed.slug } });
+
+  const existing = await prisma.phoneModel.findUnique({ where: { slug: item.canonicalSlug } });
   const details = mergeDiscoveryDetails(existing?.details, {
-    shopUrl: { operator: 'telekom', url },
-    importTag: 'telekom-listing',
+    shopUrl: { operator: item.operator, url: item.sourceUrl },
+    importTag: `${item.operator}-listing`,
   });
-  await prisma.phoneModel.upsert({
-    where: { slug: parsed.slug },
-    create: {
-      slug: parsed.slug,
-      brand: parsed.brand,
-      series: parsed.series,
-      storageGb: parsed.storageGb,
-      details,
-    },
-    update: {
-      brand: parsed.brand,
-      series: parsed.series,
-      storageGb: parsed.storageGb,
-      details,
+  const phoneModel = await upsertPhoneModelWithSpec({
+    slug: item.canonicalSlug,
+    brand: item.brand,
+    series: item.series,
+    marketingName: item.series,
+    details,
+  });
+
+  const catalogItem = await upsertOperatorCatalogItem({
+    operator: item.operator,
+    operatorItemKey: item.operatorItemKey,
+    phoneModelId: phoneModel.id,
+    sourceUrl: item.sourceUrl,
+    displayName: item.displayName,
+    variantLabel: item.variantLabel,
+    color: item.color,
+    storageGb: item.storageGb,
+    availability: item.availability,
+  });
+
+  await addScrapeArtifact({
+    scrapeRunId,
+    operator: item.operator,
+    phoneModelId: phoneModel.id,
+    operatorCatalogItemId: catalogItem.id,
+    artifactType: 'listing-card',
+    sourceUrl: item.sourceUrl,
+    contentType: 'text/plain',
+    contentText: item.variantLabel ?? item.displayName,
+    metadata: {
+      canonicalSlug: item.canonicalSlug,
+      storageGb: item.storageGb,
+      color: item.color,
+      availability: item.availability,
     },
   });
 }
 
-async function upsertFromA1Path(path: string, dryRun: boolean) {
-  const seg = a1SlugFromPath(path);
-  if (!seg) return;
-  const parsed = parseCatalogSlug(seg);
-  const abs = `https://www.a1.si${path}`;
-  if (dryRun) {
-    console.log('[a1]', parsed.slug, '→', parsed.brand, parsed.series, parsed.storageGb);
-    return;
+async function processSource(
+  operator: 'telekom' | 'a1' | 't2' | 'telemach',
+  items: CatalogDiscoveryItem[],
+  dryRun: boolean,
+) {
+  const scrapeRun = dryRun
+    ? null
+    : await beginScrapeRun({
+        operator,
+        runType: 'DISCOVER',
+        version: 'v2',
+        metadata: { discoveredCount: items.length },
+      });
+  let successCount = 0;
+  let failureCount = 0;
+  try {
+    for (const item of items) {
+      try {
+        await upsertDiscoveredItem(item, dryRun, scrapeRun?.id ?? null);
+        successCount++;
+      } catch (error) {
+        failureCount++;
+        if (scrapeRun) {
+          await addScrapeArtifact({
+            scrapeRunId: scrapeRun.id,
+            operator,
+            artifactType: 'discovery-error',
+            sourceUrl: item.sourceUrl,
+            contentType: 'text/plain',
+            contentText: String(error),
+            metadata: { itemKey: item.operatorItemKey, canonicalSlug: item.canonicalSlug },
+          });
+        }
+      }
+    }
+  } finally {
+    if (scrapeRun) {
+      await finishScrapeRun(scrapeRun.id, {
+        status: failureCount > 0 ? 'PARTIAL' : 'SUCCESS',
+        processedCount: items.length,
+        successCount,
+        failureCount,
+      });
+    }
   }
-  const existing = await prisma.phoneModel.findUnique({ where: { slug: parsed.slug } });
-  const details = mergeDiscoveryDetails(existing?.details, {
-    shopUrl: { operator: 'a1', url: abs },
-    importTag: 'a1-listing',
-  });
-  await prisma.phoneModel.upsert({
-    where: { slug: parsed.slug },
-    create: {
-      slug: parsed.slug,
-      brand: parsed.brand,
-      series: parsed.series,
-      storageGb: parsed.storageGb,
-      details,
-    },
-    update: {
-      brand: parsed.brand,
-      series: parsed.series,
-      storageGb: parsed.storageGb,
-      details,
-    },
-  });
 }
 
 async function main() {
   const dryRun = hasFlag('--dry-run');
   const sourcesArg = arg('--sources');
   const sources = new Set(
-    (sourcesArg ?? 'telekom,a1')
+    (sourcesArg ?? 'telekom,a1,t2,telemach')
       .split(',')
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean)
@@ -121,24 +157,36 @@ async function main() {
 
   let telekomCount = 0;
   let a1Count = 0;
+  let t2Count = 0;
+  let telemachCount = 0;
 
   try {
     if (sources.has('telekom')) {
-      const urls = await collectTelekomMobitelUrls(page);
-      telekomCount = urls.length;
-      console.log(`Telekom: ${urls.length} product URLs`);
-      for (const url of urls) {
-        await upsertFromTelekomUrl(url, dryRun);
-      }
+      const items = await collectTelekomCatalogItems(page);
+      telekomCount = items.length;
+      console.log(`Telekom: ${items.length} catalog items`);
+      await processSource('telekom', items, dryRun);
     }
 
     if (sources.has('a1')) {
-      const paths = await collectA1TelefoniPaths(page);
-      a1Count = paths.length;
-      console.log(`A1: ${paths.length} listing paths`);
-      for (const path of paths) {
-        await upsertFromA1Path(path, dryRun);
-      }
+      const items = await collectA1CatalogItems(page);
+      a1Count = items.length;
+      console.log(`A1: ${items.length} catalog items`);
+      await processSource('a1', items, dryRun);
+    }
+
+    if (sources.has('t2')) {
+      const items = await collectT2CatalogItems();
+      t2Count = items.length;
+      console.log(`T-2: ${items.length} catalog items`);
+      await processSource('t2', items, dryRun);
+    }
+
+    if (sources.has('telemach')) {
+      const items = await collectTelemachCatalogItems();
+      telemachCount = items.length;
+      console.log(`Telemach: ${items.length} catalog items`);
+      await processSource('telemach', items, dryRun);
     }
   } finally {
     await context.close();
@@ -149,7 +197,9 @@ async function main() {
     const total = await prisma.phoneModel.count();
     console.log(`Done. PhoneModel rows in DB: ${total}`);
   } else {
-    console.log(`Dry run: telekom URLs=${telekomCount}, a1 paths=${a1Count} (no DB writes)`);
+    console.log(
+      `Dry run: telekom URLs=${telekomCount}, a1 paths=${a1Count}, t2 items=${t2Count}, telemach items=${telemachCount} (no DB writes)`,
+    );
   }
 }
 

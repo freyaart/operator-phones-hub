@@ -33,6 +33,7 @@ export type PhoneTechnicalSpecs = {
     cpu?: string;
     gpu?: string;
     ramGb?: number;
+    storageOptionsGb?: number[];
     storageType?: string;
     /** eSIM + physical count, etc. */
     simSlots?: number;

@@ -1,12 +1,11 @@
 /**
- * Minimal catalog seed (matches the kind of row your UI compares today).
- * Extend `phones` or load from `data/phones.json`.
+ * Minimal canonical catalog seed. Extend `data/phones.json` as needed.
  */
-import type { Prisma } from '@prisma/client';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { prisma } from '../db.js';
 import type { PhoneTechnicalSpecs } from '../specs/phone-technical-specs.js';
+import { prisma } from '../db.js';
+import { upsertPhoneModelWithSpec } from '../models/upsert-phone-model.js';
 
 type SeedPhone = {
   brand: string;
@@ -21,8 +20,8 @@ const defaultPhones: SeedPhone[] = [
   {
     brand: 'Apple',
     series: 'iPhone 15 Pro',
-    storageGb: 256,
-    slug: 'apple-iphone-15-pro-256',
+    storageGb: null,
+    slug: 'apple-iphone-15-pro',
     details: { importSource: 'seed' },
     specs: {
       market: 'SI',
@@ -68,8 +67,8 @@ const defaultPhones: SeedPhone[] = [
   {
     brand: 'Apple',
     series: 'iPhone 15',
-    storageGb: 128,
-    slug: 'apple-iphone-15-128',
+    storageGb: null,
+    slug: 'apple-iphone-15',
     details: { importSource: 'seed' },
     specs: {
       market: 'SI',
@@ -124,23 +123,14 @@ async function loadPhonesFromJson(): Promise<SeedPhone[]> {
 async function main() {
   const phones = await loadPhonesFromJson();
   for (const p of phones) {
-    await prisma.phoneModel.upsert({
-      where: { slug: p.slug },
-      create: {
-        brand: p.brand,
-        series: p.series,
-        storageGb: p.storageGb,
-        slug: p.slug,
-        specs: p.specs === undefined ? undefined : (p.specs as Prisma.InputJsonValue),
-        details: p.details === undefined ? undefined : (p.details as Prisma.InputJsonValue),
-      },
-      update: {
-        brand: p.brand,
-        series: p.series,
-        storageGb: p.storageGb,
-        specs: p.specs === undefined ? undefined : (p.specs as Prisma.InputJsonValue),
-        details: p.details === undefined ? undefined : (p.details as Prisma.InputJsonValue),
-      },
+    await upsertPhoneModelWithSpec({
+      brand: p.brand,
+      series: p.series,
+      storageGb: p.storageGb,
+      slug: p.slug,
+      marketingName: p.series,
+      specs: p.specs,
+      details: p.details as never,
     });
     console.log('Upserted', p.slug);
   }

@@ -1,42 +1,62 @@
-import type { OperatorId } from '../types.js';
 import { prisma } from '../db.js';
+import type { AvailabilityStatus, OfferType, Prisma } from '@prisma/client';
 
 export type OfferPayload = {
+  phoneModelId: string;
+  operatorCatalogItemId: string;
+  operator: string;
+  offerKey: string;
+  offerType?: OfferType;
+  title?: string | null;
   retailPriceEur?: number | null;
   monthlyEur?: number | null;
-  contractLabel?: string | null;
+  initialDepositEur?: number | null;
+  contractMonths?: number | null;
+  planLabel?: string | null;
   tradeInAvailable?: boolean | null;
+  availability?: AvailabilityStatus;
   productUrl?: string | null;
-  raw?: unknown;
+  raw?: Prisma.InputJsonValue;
 };
 
-export async function upsertOperatorOffer(
-  phoneModelId: string,
-  operator: OperatorId,
-  payload: OfferPayload
-) {
+export async function upsertOperatorOffer(payload: OfferPayload) {
   return prisma.operatorOffer.upsert({
     where: {
-      phoneModelId_operator: { phoneModelId, operator },
+      operatorCatalogItemId_offerKey: {
+        operatorCatalogItemId: payload.operatorCatalogItemId,
+        offerKey: payload.offerKey,
+      },
     },
     create: {
-      phoneModelId,
-      operator,
+      phoneModelId: payload.phoneModelId,
+      operatorCatalogItemId: payload.operatorCatalogItemId,
+      operator: payload.operator,
+      offerKey: payload.offerKey,
+      offerType: payload.offerType ?? 'OTHER',
+      title: payload.title ?? null,
       retailPriceEur: payload.retailPriceEur ?? null,
       monthlyEur: payload.monthlyEur ?? null,
-      contractLabel: payload.contractLabel ?? null,
+      initialDepositEur: payload.initialDepositEur ?? null,
+      contractMonths: payload.contractMonths ?? null,
+      planLabel: payload.planLabel ?? null,
       tradeInAvailable: payload.tradeInAvailable ?? null,
+      availability: payload.availability ?? 'UNKNOWN',
       productUrl: payload.productUrl ?? null,
-      raw: payload.raw === undefined ? undefined : (payload.raw as object),
+      raw: payload.raw,
     },
     update: {
+      title: payload.title ?? null,
+      offerType: payload.offerType ?? 'OTHER',
       retailPriceEur: payload.retailPriceEur ?? null,
       monthlyEur: payload.monthlyEur ?? null,
-      contractLabel: payload.contractLabel ?? null,
+      initialDepositEur: payload.initialDepositEur ?? null,
+      contractMonths: payload.contractMonths ?? null,
+      planLabel: payload.planLabel ?? null,
       tradeInAvailable: payload.tradeInAvailable ?? null,
+      availability: payload.availability ?? 'UNKNOWN',
       productUrl: payload.productUrl ?? null,
-      raw: payload.raw === undefined ? undefined : (payload.raw as object),
-      syncedAt: new Date(),
+      raw: payload.raw,
+      capturedAt: new Date(),
     },
   });
 }

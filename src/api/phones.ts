@@ -2,9 +2,106 @@ import type { Prisma } from '@prisma/client';
 import { Hono } from 'hono';
 import { prisma } from '../db.js';
 import { isOperatorId } from '../types.js';
-import { rowForComparison, unionSortedColumns } from '../lib/flattenSpecs.js';
+import { rowForComparison, unionSortedColumns } from '../lib/phone-spec-compare.js';
 
 const app = new Hono();
+
+const phoneDetailInclude = {
+  phoneSpec: true,
+  catalogItems: {
+    include: { offers: true },
+    orderBy: [{ operator: 'asc' }, { displayName: 'asc' }],
+  },
+  artifacts: {
+    take: 10,
+    orderBy: { createdAt: 'desc' },
+  },
+} satisfies Prisma.PhoneModelInclude;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readNumericIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (typeof entry === 'number' && Number.isFinite(entry)) return entry;
+      if (typeof entry === 'string') {
+        const parsed = Number(entry);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    })
+    .filter((entry): entry is number => entry != null);
+}
+
+function getRebornProductIds(details: unknown): number[] {
+  const base = asRecord(details);
+  const rebornProducts = asRecord(base.rebornProducts);
+  const legacyRebornWave = asRecord(base.rebornWave);
+  const ids = [
+    ...readNumericIds(rebornProducts.parentProductIds),
+    ...readNumericIds(rebornProducts.childProductIds),
+    ...readNumericIds([legacyRebornWave.parentId]),
+    ...readNumericIds([legacyRebornWave.cheapestChildId]),
+  ];
+  return [...new Set(ids)];
+}
+
+function summarizeOffers(
+  offers: Array<{
+    operator: string;
+    offerType: string;
+    retailPriceEur: number | null;
+    monthlyEur: number | null;
+    initialDepositEur: number | null;
+    contractMonths: number | null;
+    planLabel: string | null;
+    productUrl: string | null;
+  }>,
+) {
+  const byOperator = new Map<
+    string,
+    {
+      bestRetailEur: number | null;
+      bestContractMonthlyEur: number | null;
+      bestContractDepositEur: number | null;
+      plans: string[];
+    }
+  >();
+  for (const offer of offers) {
+    const current =
+      byOperator.get(offer.operator) ??
+      {
+        bestRetailEur: null,
+        bestContractMonthlyEur: null,
+        bestContractDepositEur: null,
+        plans: [],
+      };
+    if (offer.offerType === 'RETAIL' && offer.retailPriceEur != null) {
+      current.bestRetailEur =
+        current.bestRetailEur == null ? offer.retailPriceEur : Math.min(current.bestRetailEur, offer.retailPriceEur);
+    }
+    if (offer.offerType !== 'RETAIL' && offer.monthlyEur != null) {
+      current.bestContractMonthlyEur =
+        current.bestContractMonthlyEur == null
+          ? offer.monthlyEur
+          : Math.min(current.bestContractMonthlyEur, offer.monthlyEur);
+      if (offer.initialDepositEur != null) {
+        current.bestContractDepositEur =
+          current.bestContractDepositEur == null
+            ? offer.initialDepositEur
+            : Math.min(current.bestContractDepositEur, offer.initialDepositEur);
+      }
+    }
+    if (offer.planLabel && !current.plans.includes(offer.planLabel)) current.plans.push(offer.planLabel);
+    byOperator.set(offer.operator, current);
+  }
+  return Object.fromEntries(byOperator);
+}
 
 app.get('/phones', async (c) => {
   const brand = c.req.query('brand');
@@ -20,18 +117,28 @@ app.get('/phones', async (c) => {
     if (!isOperatorId(operator)) {
       return c.json({ error: `Invalid operator. Use one of: ${['a1', 'telekom', 't2', 'telemach'].join(', ')}` }, 400);
     }
-    where.offers = { some: { operator } };
+    where.catalogItems = { some: { operator } };
   }
 
   const rows = await prisma.phoneModel.findMany({
     where,
-    orderBy: [{ brand: 'asc' }, { series: 'asc' }, { storageGb: 'asc' }],
+    orderBy: [{ brand: 'asc' }, { series: 'asc' }],
     include: {
-      offers: true,
+      phoneSpec: true,
+      catalogItems: {
+        where: operator ? { operator } : undefined,
+        include: { offers: true },
+        orderBy: [{ operator: 'asc' }, { displayName: 'asc' }],
+      },
     },
   });
 
-  return c.json({ data: rows, count: rows.length });
+  const data = rows.map((row) => ({
+    ...row,
+    offerSummary: summarizeOffers(row.catalogItems.flatMap((item) => item.offers)),
+  }));
+
+  return c.json({ data, count: data.length });
 });
 
 /** Side-by-side rows for comparison tables (flattened `specs` + identity columns). */
@@ -45,7 +152,10 @@ app.get('/phones/compare', async (c) => {
 
   const found = await prisma.phoneModel.findMany({
     where: { slug: { in: slugs } },
-    include: { offers: true },
+    include: {
+      phoneSpec: true,
+      offers: true,
+    },
   });
 
   const bySlug = new Map(found.map((p) => [p.slug, p]));
@@ -55,23 +165,99 @@ app.get('/phones/compare', async (c) => {
   }
 
   const phones = slugs.map((s) => bySlug.get(s)!);
-  const rows = phones.map(rowForComparison);
+  const rows = phones.map((phone) => {
+    const base = rowForComparison(phone);
+    const summary = summarizeOffers(phone.offers);
+    for (const [operator, values] of Object.entries(summary)) {
+      base[`${operator}.retail`] = values.bestRetailEur;
+      base[`${operator}.contractMonthly`] = values.bestContractMonthlyEur;
+      base[`${operator}.contractDeposit`] = values.bestContractDepositEur;
+      base[`${operator}.plans`] = values.plans.join('; ') || null;
+    }
+    return base;
+  });
   const columns = unionSortedColumns(rows);
 
   return c.json({
     slugs: phones.map((p) => p.slug),
     columns,
     rows,
-    /** Original nested objects if the UI needs grouped sections */
     phones,
   });
+});
+
+app.get('/operators/:operator/catalog', async (c) => {
+  const operator = c.req.param('operator');
+  if (!isOperatorId(operator)) {
+    return c.json({ error: `Invalid operator. Use one of: ${['a1', 'telekom', 't2', 'telemach'].join(', ')}` }, 400);
+  }
+  const items = await prisma.operatorCatalogItem.findMany({
+    where: { operator },
+    include: {
+      phoneModel: {
+        include: {
+          phoneSpec: true,
+        },
+      },
+      offers: true,
+    },
+    orderBy: [{ displayName: 'asc' }],
+  });
+  return c.json({ data: items, count: items.length });
+});
+
+app.get('/phones/:slug/offers', async (c) => {
+  const slug = c.req.param('slug');
+  const row = await prisma.phoneModel.findUnique({
+    where: { slug },
+    include: {
+      phoneSpec: true,
+      catalogItems: {
+        include: { offers: true },
+        orderBy: [{ operator: 'asc' }, { displayName: 'asc' }],
+      },
+    },
+  });
+  if (!row) return c.json({ error: 'Not found' }, 404);
+  return c.json({
+    data: {
+      phone: {
+        id: row.id,
+        slug: row.slug,
+        brand: row.brand,
+        series: row.series,
+        marketingName: row.marketingName,
+        releaseYear: row.releaseYear,
+        phoneSpec: row.phoneSpec,
+      },
+      catalogItems: row.catalogItems,
+      offerSummary: summarizeOffers(row.catalogItems.flatMap((item) => item.offers)),
+    },
+  });
+});
+
+app.get('/phones/reborn/:productId', async (c) => {
+  const productId = Number(c.req.param('productId'));
+  if (!Number.isFinite(productId)) {
+    return c.json({ error: 'Reborn product id must be numeric' }, 400);
+  }
+
+  const rows = await prisma.phoneModel.findMany({
+    include: phoneDetailInclude,
+    orderBy: [{ brand: 'asc' }, { series: 'asc' }],
+  });
+
+  const row = rows.find((candidate) => getRebornProductIds(candidate.details).includes(productId));
+  if (!row) return c.json({ error: 'Not found' }, 404);
+
+  return c.json({ data: row });
 });
 
 app.get('/phones/:slug', async (c) => {
   const slug = c.req.param('slug');
   const row = await prisma.phoneModel.findUnique({
     where: { slug },
-    include: { offers: true },
+    include: phoneDetailInclude,
   });
   if (!row) return c.json({ error: 'Not found' }, 404);
   return c.json({ data: row });

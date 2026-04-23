@@ -21,6 +21,17 @@ export function manualShopUrl(phone: PhoneRow, operator: string): string | null 
   return typeof u === 'string' && u.startsWith('http') ? u : null;
 }
 
+export function manualShopUrls(phone: PhoneRow): Record<string, string> {
+  const d = asRecord(phone.details);
+  const urls = d?.shopUrls;
+  if (!urls || typeof urls !== 'object' || Array.isArray(urls)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(urls as Record<string, unknown>)) {
+    if (typeof value === 'string' && value.startsWith('http')) out[key] = value;
+  }
+  return out;
+}
+
 /** Telekom mobitel PDP slug candidates (path segment after `/p/`). */
 export function telekomMobitelSlugs(phone: PhoneRow): string[] {
   const manual = manualShopUrl(phone, 'telekom');

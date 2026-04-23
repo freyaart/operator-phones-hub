@@ -1,7 +1,24 @@
 const STORAGE = new Set([32, 64, 128, 256, 512, 1024]);
 
 const COLOR_SUFFIX =
-  /-(crna|bela|crn|black|white|modra|zelena|siva|grafitna|mentol|cosmic|titan|orange|plavi|vijoli|zlata|transparent|obsidian|mix|vijolicna|nebesno|blescece|izjemna|dark|light|natural|platinum|space|midnight|starlight|blue|green|purple|pink|gold|prozorno|violet|lavender|titanium|alpine|graphite|sierra|pacific|slate|cream|coral|lavanda)(?:-\d+)?$/i;
+  /-(crna|bela|crn|black|white|modra|zelena|siva|grafitna|mentol|cosmic(?:-orange)?|titan|orange|plavi|vijoli|zlata|transparent|obsidian|mix|vijolicna|nebesno|nebesko(?:-modra)?|kobaltno(?:-vijolicna)?|ledeno(?:-modra)?|mornarsko(?:-modra)?|senca|blescece|izjemna(?:-temno-siva)?|dark(?:-blue|-green)?|light|natural|platinum|space|midnight|starlight|blue|green|purple|pink|gold|prozorno|violet|lavender|titanium|alpine|graphite|sierra|pacific|slate|cream|coral|lavanda|grey|gray|sky-blue|mint|silver|srebrna|belo|peach|rose|golden)(?:-\d+)?$/i;
+
+const NON_PHONE_HINT = /(watch|kiddo|tab-|tablet|ipad|buds|airpods|case|ovitek|mapa|etui|zascit|glass|steklo|polnilec|charger|cable|kabel)/i;
+
+const BRAND_SLUG: Record<string, string> = {
+  Apple: 'apple',
+  Samsung: 'samsung',
+  Google: 'google',
+  Xiaomi: 'xiaomi',
+  Honor: 'honor',
+  Huawei: 'huawei',
+  Doro: 'doro',
+  Nothing: 'nothing',
+  OnePlus: 'oneplus',
+  Oppo: 'oppo',
+  Motorola: 'motorola',
+  Realme: 'realme',
+};
 
 function inferBrand(slug: string): string {
   const s = slug.toLowerCase();
@@ -31,6 +48,35 @@ export function extractStorageGb(slug: string): number | null {
   return last;
 }
 
+function extractColorSlug(slug: string): string | null {
+  const match = slug.match(COLOR_SUFFIX);
+  if (!match) return null;
+  return match[1].toLowerCase();
+}
+
+function humanizeToken(w: string): string {
+  if (w === '5g' || w === '4g') return w.toUpperCase();
+  if (/^iphone/i.test(w)) return w.replace(/^i/, 'I');
+  if (/^\d+[a-z]?$/i.test(w)) return w.toUpperCase();
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
+
+function normalizeAscii(input: string): string {
+  return input.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+}
+
+export function slugifyCatalogText(input: string): string {
+  return normalizeAscii(input)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[+/(),]/g, ' ')
+    .replace(/['".]/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function humanizeSeries(slug: string, brand: string): string {
   let s = slug.toLowerCase().replace(/#/g, '');
   const st = extractStorageGb(s);
@@ -58,11 +104,7 @@ export function humanizeSeries(slug: string, brand: string): string {
   s = s.replace(/^-+|-+$/g, '');
   const words = s.split('-').filter(Boolean);
   let joined = words
-    .map((w) => {
-      if (w === '5g' || w === '4g') return w.toUpperCase();
-      if (/^iphone/i.test(w)) return w.replace(/^i/, 'I');
-      return w.charAt(0).toUpperCase() + w.slice(1);
-    })
+    .map(humanizeToken)
     .join(' ');
   joined = joined.replace(/\bIphone\b/g, 'iPhone');
   if (st) joined = joined.replace(new RegExp(`\\s+${st}$`), '');
@@ -70,16 +112,57 @@ export function humanizeSeries(slug: string, brand: string): string {
 }
 
 export type ParsedCatalogDevice = {
-  slug: string;
+  canonicalSlug: string;
+  variantSlug: string;
   brand: string;
   series: string;
   storageGb: number | null;
+  color: string | null;
+  isPhone: boolean;
 };
 
+export function parseCatalogName(input: {
+  brand?: string | null;
+  name: string;
+}): ParsedCatalogDevice {
+  const rawName = input.name
+    .replace(/\b(mobilni|pametni)\s+telefon\b/gi, '')
+    .replace(/\btelefon\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const brand = input.brand?.trim();
+  const prefixed =
+    brand && !new RegExp(`^${brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(rawName)
+      ? `${brand} ${rawName}`
+      : rawName;
+  return parseCatalogSlug(slugifyCatalogText(prefixed));
+}
+
 export function parseCatalogSlug(pathSegment: string): ParsedCatalogDevice {
-  const slug = pathSegment.toLowerCase().split('#')[0].replace(/^\/+|\/+$/g, '');
-  const brand = inferBrand(slug);
-  const storageGb = extractStorageGb(slug);
-  const series = humanizeSeries(slug, brand);
-  return { slug, brand, series, storageGb };
+  const variantSlug = pathSegment.toLowerCase().split('#')[0].replace(/^\/+|\/+$/g, '');
+  const brand = inferBrand(variantSlug);
+  const storageGb = extractStorageGb(variantSlug);
+  const color = extractColorSlug(variantSlug);
+  let canonicalCore = variantSlug;
+  if (storageGb) {
+    canonicalCore = canonicalCore.replace(new RegExp(`-${storageGb}-gb`, 'i'), '');
+    canonicalCore = canonicalCore.replace(new RegExp(`-${storageGb}gb`, 'i'), '');
+  }
+  canonicalCore = canonicalCore.replace(COLOR_SUFFIX, '');
+  const brandPrefix = BRAND_SLUG[brand] ?? variantSlug.split('-')[0];
+  const withoutBrand = canonicalCore
+    .replace(new RegExp(`^${brandPrefix}-`, 'i'), '')
+    .replace(/^iphone-/i, 'iphone-')
+    .replace(/^-+|-+$/g, '');
+  const canonicalSlug = `${brandPrefix}-${withoutBrand}`.replace(/--+/g, '-');
+  const series = humanizeSeries(canonicalCore, brand);
+  return {
+    canonicalSlug,
+    variantSlug,
+    brand,
+    series,
+    storageGb,
+    color: color ? color.split('-').map(humanizeToken).join(' ') : null,
+    isPhone: !NON_PHONE_HINT.test(variantSlug),
+  };
 }

@@ -7,44 +7,214 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Canonical handset (one row per market variant you care about, e.g. storage SKU).
-model PhoneModel {
-  id        String   @id @default(cuid())
-  brand     String
-  /// Display name without storage, e.g. "iPhone 15 Pro"
-  series    String
-  /// Nullable when model is "single SKU"
-  storageGb Int?
-  /// URL-safe unique key, e.g. "apple-iphone-15-pro-256"
-  slug      String   @unique
-  /// Structured technical data for comparison tables (see `PhoneTechnicalSpecs` in src).
-  specs     Json?
-  /// Non-technical metadata: internal SKUs, import source, Wave/Foxway ids, editorial notes.
-  details   Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum AvailabilityStatus {
+  UNKNOWN
+  IN_STOCK
+  OUT_OF_STOCK
+  PREORDER
+  DISCONTINUED
+  BLOCKED
+}
 
-  offers OperatorOffer[]
+enum OfferType {
+  RETAIL
+  CONTRACT
+  LOYALTY
+  OTHER
+}
+
+enum ScrapeRunType {
+  DISCOVER
+  SYNC
+}
+
+enum ScrapeStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILURE
+}
+
+/// Canonical handset row. Operator-specific sellable variants live in `OperatorCatalogItem`.
+model PhoneModel {
+  id            String   @id @default(cuid())
+  brand         String
+  /// Display name without storage, e.g. "iPhone 15 Pro"
+  series        String
+  marketingName String?
+  releaseYear   Int?
+  /// Legacy / fallback field kept for compatibility with older seed/discovery data.
+  storageGb     Int?
+  /// URL-safe canonical key, e.g. "apple-iphone-15-pro"
+  slug          String   @unique
+  /// Structured technical data for comparison tables (see `PhoneTechnicalSpecs` in src).
+  specs         Json?
+  /// Non-technical metadata: internal SKUs, import source, Wave/Foxway ids, editorial notes.
+  details       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  phoneSpec     PhoneSpec?
+  catalogItems  OperatorCatalogItem[]
+  offers        OperatorOffer[]   @relation("PhoneModelOffers")
+  artifacts     ScrapeArtifact[]  @relation("PhoneModelArtifacts")
 
   @@index([brand, series])
 }
 
-/// Latest scraped row per (phone, operator). Re-sync overwrites the same row.
-model OperatorOffer {
-  id               String     @id @default(cuid())
-  phoneModelId     String
-  phoneModel       PhoneModel @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
-  /// a1 | telekom | t2 | telemach
-  operator         String
-  retailPriceEur   Float?
-  monthlyEur       Float?
-  contractLabel    String?
-  tradeInAvailable Boolean?
-  productUrl       String?
-  /// Raw fragment from the page or API for debugging / re-parsing.
-  raw              Json?
-  syncedAt         DateTime   @default(now())
+/// Typed comparison data used by `/api/phones/compare`.
+model PhoneSpec {
+  id                       String    @id @default(cuid())
+  phoneModelId             String    @unique
+  phoneModel               PhoneModel @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
+  market                   String?
+  releaseYear              Int?
+  heightMm                 Float?
+  widthMm                  Float?
+  depthMm                  Float?
+  weightG                  Float?
+  displayDiagonalInch      Float?
+  displayWidthPx           Int?
+  displayHeightPx          Int?
+  displayResolutionLabel   String?
+  displayAspectRatio       String?
+  displayPanelType         String?
+  displayRefreshRateHz     Int?
+  displayTouchSamplingHz   Int?
+  displayPeakBrightnessNits Int?
+  displayHdr               String[]  @default([])
+  displayProtection        String[]  @default([])
+  displayAlwaysOn          Boolean?
+  chipset                  String?
+  cpu                      String?
+  gpu                      String?
+  ramGb                    Int?
+  storageOptionsGb         Int[]     @default([])
+  storageType              String?
+  simSlots                 Int?
+  esim                     Boolean?
+  usb                      String?
+  wifi                     String?
+  bluetooth                String?
+  nfc                      Boolean?
+  uwb                      Boolean?
+  satellite                String?
+  rearCameraSummary        String?
+  frontCameraSummary       String?
+  videoSummary             String?
+  stereoSpeakers           Boolean?
+  headphoneJack            Boolean?
+  batteryCapacityMah       Int?
+  wiredChargeW             Int?
+  wirelessChargeW          Int?
+  reverseWireless          Boolean?
+  os                       String?
+  osVersionAtLaunch        String?
+  updatePolicyYears        Int?
+  cellular                 String?
+  fiveG                    Boolean?
+  fiveGBandsNote           String?
+  frameMaterial            String?
+  backMaterial             String?
+  ipRating                 String?
+  colors                   String[]  @default([])
+  faceBiometrics           Boolean?
+  fingerprint              String?
+  extras                   Json?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+}
 
-  @@unique([phoneModelId, operator])
+/// Operator-specific sellable item / PDP / listing reference.
+model OperatorCatalogItem {
+  id              String             @id @default(cuid())
+  operator        String
+  operatorItemKey String
+  phoneModelId    String
+  phoneModel      PhoneModel         @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
+  sourceUrl       String
+  displayName     String
+  variantLabel    String?
+  color           String?
+  storageGb       Int?
+  availability    AvailabilityStatus @default(UNKNOWN)
+  discoveredAt    DateTime           @default(now())
+  lastSeenAt      DateTime           @default(now())
+
+  offers          OperatorOffer[]    @relation("CatalogItemOffers")
+  artifacts       ScrapeArtifact[]   @relation("CatalogItemArtifacts")
+
+  @@unique([operator, operatorItemKey])
+  @@index([operator, phoneModelId])
+  @@index([phoneModelId])
+}
+
+/// One row per operator item + offer mode (retail, contract, loyalty, ...).
+model OperatorOffer {
+  id                   String             @id @default(cuid())
+  phoneModelId         String
+  phoneModel           PhoneModel         @relation("PhoneModelOffers", fields: [phoneModelId], references: [id], onDelete: Cascade)
+  operatorCatalogItemId String
+  operatorCatalogItem  OperatorCatalogItem @relation("CatalogItemOffers", fields: [operatorCatalogItemId], references: [id], onDelete: Cascade)
+  /// a1 | telekom | t2 | telemach
+  operator             String
+  offerKey             String
+  offerType            OfferType          @default(OTHER)
+  title                String?
+  retailPriceEur       Float?
+  monthlyEur           Float?
+  initialDepositEur    Float?
+  contractMonths       Int?
+  planLabel            String?
+  tradeInAvailable     Boolean?
+  availability         AvailabilityStatus @default(UNKNOWN)
+  productUrl           String?
+  /// Raw fragment from the page or API for debugging / re-parsing.
+  raw                  Json?
+  capturedAt           DateTime           @default(now())
+
+  @@unique([operatorCatalogItemId, offerKey])
+  @@index([phoneModelId, operator])
   @@index([operator])
+}
+
+model ScrapeRun {
+  id             String        @id @default(cuid())
+  operator       String
+  runType        ScrapeRunType
+  status         ScrapeStatus  @default(RUNNING)
+  version        String?
+  startedAt      DateTime      @default(now())
+  finishedAt     DateTime?
+  processedCount Int           @default(0)
+  successCount   Int           @default(0)
+  failureCount   Int           @default(0)
+  notes          String?
+  metadata       Json?
+
+  artifacts      ScrapeArtifact[] @relation("RunArtifacts")
+
+  @@index([operator, runType, startedAt])
+}
+
+model ScrapeArtifact {
+  id                  String              @id @default(cuid())
+  scrapeRunId         String?
+  scrapeRun           ScrapeRun?          @relation("RunArtifacts", fields: [scrapeRunId], references: [id], onDelete: SetNull)
+  operator            String
+  phoneModelId        String?
+  phoneModel          PhoneModel?         @relation("PhoneModelArtifacts", fields: [phoneModelId], references: [id], onDelete: SetNull)
+  operatorCatalogItemId String?
+  operatorCatalogItem OperatorCatalogItem? @relation("CatalogItemArtifacts", fields: [operatorCatalogItemId], references: [id], onDelete: SetNull)
+  artifactType        String
+  sourceUrl           String?
+  contentType         String?
+  contentText         String?             @db.Text
+  checksum            String?
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+
+  @@index([operator, artifactType, createdAt])
+  @@index([phoneModelId])
+  @@index([operatorCatalogItemId])
 }
