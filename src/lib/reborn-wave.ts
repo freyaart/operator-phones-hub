@@ -1,3 +1,5 @@
+import { humanizeSeries } from '../discovery/parse-catalog-slug.js';
+
 type PhoneLookup = {
   slug: string;
   brand: string;
@@ -34,7 +36,38 @@ export type RebornWaveLookupResult = {
 function getBaseUrl(): string | null {
   const base = process.env.REBORN_WAVE_API_URL?.trim() || '';
   if (!base) return null;
-  return base.endsWith('/') ? base.slice(0, -1) : base;
+  return base;
+}
+
+function getLookupUrl(base: string, modelQuery: string): string {
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const url = new URL('product/reborn-products', normalizedBase);
+  url.searchParams.set('query', modelQuery);
+  return url.toString();
+}
+
+function normalizeWords(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function isTooThinModelName(value: string): boolean {
+  const normalized = normalizeWords(value);
+  if (!normalized) return true;
+  return /^\d+[a-z]?$/i.test(normalized);
+}
+
+function buildModelQuery(phone: PhoneLookup): string {
+  const brand = normalizeWords(phone.brand);
+  const series = normalizeWords(phone.series);
+  const marketingName = normalizeWords(phone.marketingName ?? '');
+  const slugSeries = normalizeWords(humanizeSeries(phone.slug, phone.brand));
+  const base = !isTooThinModelName(series)
+    ? series
+    : !isTooThinModelName(marketingName)
+      ? marketingName
+      : slugSeries || `${phone.brand} ${phone.slug}`;
+  const includesBrand = new RegExp(`\\b${brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(base);
+  return includesBrand ? base : `${brand} ${base}`.trim();
 }
 
 export function hasRebornWaveApiConfigured(): boolean {
@@ -45,11 +78,10 @@ export async function fetchRebornWaveProducts(phone: PhoneLookup): Promise<Rebor
   const base = getBaseUrl();
   if (!base) return null;
 
-  const modelQuery = phone.marketingName?.trim() || `${phone.brand} ${phone.series}`.trim();
-  const url = new URL('/api/product/reborn-products', base);
-  url.searchParams.set('query', modelQuery);
+  const modelQuery = buildModelQuery(phone);
+  const url = getLookupUrl(base, modelQuery);
 
-  const response = await fetch(url.toString(), {
+  const response = await fetch(url, {
     headers: {
       'user-agent':
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',

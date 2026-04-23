@@ -105,52 +105,34 @@ async function syncPhoneReborn(phone: {
   });
 
   if (!lookup) {
-    await prisma.$transaction([
-      prisma.rebornProduct.deleteMany({ where: { phoneModelId: phone.id } }),
-      prisma.phoneModel.update({
-        where: { id: phone.id },
-        data: {
-          rebornProductId: null,
-          rebornParentProductId: null,
-          rebornPriceEur: null,
-          details: cleanupRebornDetails(phone.details),
-        },
-      }),
-    ]);
+    await prisma.phoneModel.update({
+      where: { id: phone.id },
+      data: {
+        rebornProductId: null,
+        rebornParentProductId: null,
+        rebornPriceEur: null,
+        details: cleanupRebornDetails(phone.details),
+      },
+    });
     return null;
   }
 
   const products = flattenGroups(lookup.groups);
   const canonical = selectCanonicalProduct(products);
-  const productIds = products.map((product) => product.productId);
+  const writes: Prisma.PrismaPromise<unknown>[] = [];
 
-  const writes: Prisma.PrismaPromise<unknown>[] = [
-    prisma.rebornProduct.deleteMany({
-      where: {
-        OR: [{ phoneModelId: phone.id }, { productId: { in: productIds } }],
-      },
-    }),
-  ];
-
-  if (products.length > 0) {
+  if (canonical?.productId != null) {
     writes.push(
-      prisma.rebornProduct.createMany({
-        data: products.map((product) => ({
-          phoneModelId: phone.id,
-          productId: product.productId,
-          parentProductId: product.parentProductId,
-          isParent: product.isParent,
-          isMatched: product.isMatched,
-          name: product.name,
-          optionText: product.optionText,
-          sku: product.sku,
-          priceEur: product.priceEur,
-          oldPriceEur: product.oldPriceEur,
-          conditionStatus: product.conditionStatus,
-          foxwayItemVariantId: product.foxwayItemVariantId,
-          purchaseStatus: product.purchaseStatus,
-          active: product.active,
-        })),
+      prisma.phoneModel.updateMany({
+        where: {
+          rebornProductId: canonical.productId,
+          id: { not: phone.id },
+        },
+        data: {
+          rebornProductId: null,
+          rebornParentProductId: null,
+          rebornPriceEur: null,
+        },
       }),
     );
   }
@@ -167,6 +149,45 @@ async function syncPhoneReborn(phone: {
     }),
   );
 
+  for (const product of products) {
+    writes.push(
+      prisma.rebornProduct.upsert({
+        where: { productId: product.productId },
+        create: {
+          phoneModelId: phone.id,
+          productId: product.productId,
+          parentProductId: product.parentProductId,
+          isParent: product.isParent,
+          isMatched: product.isMatched,
+          name: product.name,
+          optionText: product.optionText,
+          sku: product.sku,
+          priceEur: product.priceEur,
+          oldPriceEur: product.oldPriceEur,
+          conditionStatus: product.conditionStatus,
+          foxwayItemVariantId: product.foxwayItemVariantId,
+          purchaseStatus: product.purchaseStatus,
+          active: product.active,
+        },
+        update: {
+          phoneModelId: phone.id,
+          parentProductId: product.parentProductId,
+          isParent: product.isParent,
+          isMatched: product.isMatched,
+          name: product.name,
+          optionText: product.optionText,
+          sku: product.sku,
+          priceEur: product.priceEur,
+          oldPriceEur: product.oldPriceEur,
+          conditionStatus: product.conditionStatus,
+          foxwayItemVariantId: product.foxwayItemVariantId,
+          purchaseStatus: product.purchaseStatus,
+          active: product.active,
+        },
+      }),
+    );
+  }
+
   await prisma.$transaction(writes);
   return {
     modelQuery: lookup.modelQuery,
@@ -181,7 +202,7 @@ async function main() {
     process.exit(1);
   }
 
-  const concurrency = Math.max(1, Number.parseInt(process.env.REBORN_SYNC_CONCURRENCY ?? '5', 10) || 5);
+  const concurrency = Math.max(1, Number.parseInt(process.env.REBORN_SYNC_CONCURRENCY ?? '1', 10) || 1);
   const run = await beginScrapeRun({
     operator: 'reborn-wave',
     runType: 'SYNC',
@@ -195,6 +216,17 @@ async function main() {
   const phones = await prisma.phoneModel.findMany({
     orderBy: [{ brand: 'asc' }, { series: 'asc' }],
   });
+
+  await prisma.$transaction([
+    prisma.rebornProduct.deleteMany(),
+    prisma.phoneModel.updateMany({
+      data: {
+        rebornProductId: null,
+        rebornParentProductId: null,
+        rebornPriceEur: null,
+      },
+    }),
+  ]);
 
   let nextIndex = 0;
   await Promise.all(
