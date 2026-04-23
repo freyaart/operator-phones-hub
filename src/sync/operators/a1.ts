@@ -26,7 +26,14 @@ function extractMonthlyAndDeposit(body: string) {
 export async function scrapeA1(page: Page, target: SyncTarget): Promise<OperatorSyncResult> {
   await page.goto(target.sourceUrl, { waitUntil: 'domcontentloaded', timeout: 55000 });
   await acceptA1Cookies(page);
-  await page.waitForTimeout(3500);
+  await page.locator('body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  await page
+    .waitForFunction(() => {
+      const doc = (globalThis as { document?: { body?: { innerText?: string } } }).document;
+      const text = doc?.body?.innerText || '';
+      return /Cena\s+brez\s+vezave|Obrok|€/i.test(text);
+    }, { timeout: 7000 })
+    .catch(() => {});
   const body = await page.innerText('body').catch(() => '');
   const availability = normalizeAvailability(body);
 

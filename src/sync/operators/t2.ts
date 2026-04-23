@@ -9,7 +9,14 @@ import type { OperatorSyncResult, SyncTarget } from './types.js';
  */
 export async function scrapeT2(page: Page, target: SyncTarget): Promise<OperatorSyncResult> {
   await page.goto(target.sourceUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-  await page.waitForTimeout(3500);
+  await page.locator('body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  await page
+    .waitForFunction(() => {
+      const doc = (globalThis as { document?: { body?: { innerText?: string } } }).document;
+      const text = doc?.body?.innerText || '';
+      return /€/i.test(text);
+    }, { timeout: 5000 })
+    .catch(() => {});
   const body = await page.innerText('body').catch(() => '');
   const retailMatch = body.match(/([\d.]+,\d{2})\s*€/);
   const retailPriceEur = retailMatch ? parseSiEuroString(retailMatch[1]) : null;

@@ -5,7 +5,14 @@ import type { OperatorSyncResult, SyncTarget } from './types.js';
 
 export async function scrapeTelemach(page: Page, target: SyncTarget): Promise<OperatorSyncResult> {
   const res = await page.goto(target.sourceUrl, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => null);
-  await page.waitForTimeout(2500);
+  await page.locator('body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  await page
+    .waitForFunction(() => {
+      const doc = (globalThis as { document?: { body?: { innerText?: string } } }).document;
+      const text = doc?.body?.innerText || '';
+      return /€/i.test(text) || /access blocked/i.test(text);
+    }, { timeout: 5000 })
+    .catch(() => {});
   const title = await page.title().catch(() => '');
   const html = await page.content().catch(() => '');
   if (/access blocked/i.test(title) || /access blocked/i.test(html)) {

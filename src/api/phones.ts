@@ -8,6 +8,9 @@ const app = new Hono();
 
 const phoneDetailInclude = {
   phoneSpec: true,
+  rebornProducts: {
+    orderBy: [{ isMatched: 'desc' }, { isParent: 'asc' }, { priceEur: 'asc' }, { productId: 'asc' }],
+  },
   catalogItems: {
     include: { offers: true },
     orderBy: [{ operator: 'asc' }, { displayName: 'asc' }],
@@ -17,39 +20,6 @@ const phoneDetailInclude = {
     orderBy: { createdAt: 'desc' },
   },
 } satisfies Prisma.PhoneModelInclude;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value != null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readNumericIds(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => {
-      if (typeof entry === 'number' && Number.isFinite(entry)) return entry;
-      if (typeof entry === 'string') {
-        const parsed = Number(entry);
-        return Number.isFinite(parsed) ? parsed : null;
-      }
-      return null;
-    })
-    .filter((entry): entry is number => entry != null);
-}
-
-function getRebornProductIds(details: unknown): number[] {
-  const base = asRecord(details);
-  const rebornProducts = asRecord(base.rebornProducts);
-  const legacyRebornWave = asRecord(base.rebornWave);
-  const ids = [
-    ...readNumericIds(rebornProducts.parentProductIds),
-    ...readNumericIds(rebornProducts.childProductIds),
-    ...readNumericIds([legacyRebornWave.parentId]),
-    ...readNumericIds([legacyRebornWave.cheapestChildId]),
-  ];
-  return [...new Set(ids)];
-}
 
 function summarizeOffers(
   offers: Array<{
@@ -242,15 +212,20 @@ app.get('/phones/reborn/:productId', async (c) => {
     return c.json({ error: 'Reborn product id must be numeric' }, 400);
   }
 
-  const rows = await prisma.phoneModel.findMany({
-    include: phoneDetailInclude,
-    orderBy: [{ brand: 'asc' }, { series: 'asc' }],
+  const rebornProduct = await prisma.rebornProduct.findUnique({
+    where: { productId },
+    include: {
+      phoneModel: {
+        include: phoneDetailInclude,
+      },
+    },
   });
+  if (!rebornProduct) return c.json({ error: 'Not found' }, 404);
 
-  const row = rows.find((candidate) => getRebornProductIds(candidate.details).includes(productId));
-  if (!row) return c.json({ error: 'Not found' }, 404);
-
-  return c.json({ data: row });
+  return c.json({
+    data: rebornProduct.phoneModel,
+    rebornProduct,
+  });
 });
 
 app.get('/phones/:slug', async (c) => {

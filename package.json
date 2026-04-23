@@ -13,6 +13,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "backfill:normalized": "tsx src/scripts/backfill-normalized-data.ts",
     "sync": "tsx src/scripts/sync.ts",
+    "sync:reborn": "tsx src/scripts/sync-reborn.ts",
     "discover": "tsx src/scripts/discover-models.ts",
     "specs:gsmarena": "tsx src/scripts/import-gsmarena-specs.ts",
     "playwright:install": "npx playwright install chromium",

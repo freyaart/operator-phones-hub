@@ -44,27 +44,39 @@ function parseContractPanel(panel: string, target: SyncTarget, offerKey: string,
   };
 }
 
+async function readPanelText(page: Page, tabSelector: string, panelSelector: string): Promise<string> {
+  const tab = page.locator(tabSelector).first();
+  if (await tab.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await tab.click({ timeout: 5000 }).catch(() => {});
+  }
+
+  const panel = page.locator(panelSelector).first();
+  await panel.waitFor({ state: 'visible', timeout: 7000 }).catch(() => {});
+  return panel.innerText().catch(() => '');
+}
+
 export async function scrapeTelekom(page: Page, target: SyncTarget): Promise<OperatorSyncResult> {
   await page.goto(target.sourceUrl, { waitUntil: 'domcontentloaded', timeout: 55000 });
   await acceptTelekomCookies(page);
-  await page.waitForTimeout(5000);
+  await page.locator('body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  await page
+    .locator('[data-tab="brez-vezave"], [data-panel="brez-vezave"]')
+    .first()
+    .waitFor({ state: 'visible', timeout: 10000 })
+    .catch(() => {});
   const body = await page.innerText('body').catch(() => '');
   const availability = normalizeAvailability(body);
   const tradeInNeg = /staro\s+za\s+novo.*ni\s+(možn|mogoč)/i.test(body);
   const tradeInPos = /staro\s+za\s+novo/i.test(body);
   const tradeInAvailable = tradeInNeg ? false : tradeInPos ? true : null;
 
-  await page.locator('[data-tab="brez-vezave"]').first().click({ timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(1800);
-  const retailPanel = await page.locator('[data-panel="brez-vezave"]').first().innerText().catch(() => '');
-
-  await page.locator('[data-tab="vezava"]').first().click({ timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(1800);
-  const contractPanel = await page.locator('[data-panel="vezava"]').first().innerText().catch(() => '');
-
-  await page.locator('[data-tab="program-zvestobe"]').first().click({ timeout: 5000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-  const loyaltyPanel = await page.locator('[data-panel="program-zvestobe"]').first().innerText().catch(() => '');
+  const retailPanel = await readPanelText(page, '[data-tab="brez-vezave"]', '[data-panel="brez-vezave"]');
+  const contractPanel = await readPanelText(page, '[data-tab="vezava"]', '[data-panel="vezava"]');
+  const loyaltyPanel = await readPanelText(
+    page,
+    '[data-tab="program-zvestobe"]',
+    '[data-panel="program-zvestobe"]',
+  );
 
   const offers = [
     parseRetailPanel(retailPanel, target),

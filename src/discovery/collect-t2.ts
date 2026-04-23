@@ -31,6 +31,12 @@ function stripHtml(input: string): string {
   return decodeHtml(input).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function parseEuro(text: string): number | null {
+  const match = text.match(/([\d.]+,\d{2})\s*€/);
+  if (!match) return null;
+  return Number.parseFloat(match[1].replace(/\./g, '').replace(',', '.'));
+}
+
 async function fetchT2SearchPage(pageIndex: number, pageSize: number) {
   const response = await fetch(SEARCH_URL, {
     method: 'POST',
@@ -78,6 +84,7 @@ function parseT2ResultsHtml(resultsHTML: string): CatalogDiscoveryItem[] {
     if (!parsed.isPhone) continue;
 
     const cardText = stripHtml(product);
+    const retailPriceEur = parseEuro(cardText);
     const sourceUrl = href.startsWith('http') ? href : `${BASE}${href}`;
     items.push({
       operator: 't2',
@@ -92,6 +99,20 @@ function parseT2ResultsHtml(resultsHTML: string): CatalogDiscoveryItem[] {
       brand: parsed.brand,
       series: parsed.series,
       isPhone: parsed.isPhone,
+      listingOffers:
+        retailPriceEur != null
+          ? [
+              {
+                offerKey: 'retail',
+                offerType: 'RETAIL',
+                title: 'T-2 cena',
+                retailPriceEur,
+                raw: {
+                  source: 't2-search-html',
+                },
+              },
+            ]
+          : [],
     });
   }
 

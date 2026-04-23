@@ -51,15 +51,21 @@ model PhoneModel {
   specs         Json?
   /// Non-technical metadata: internal SKUs, import source, Wave/Foxway ids, editorial notes.
   details       Json?
+  /// Canonical Reborn variant chosen for direct lookup/querying.
+  rebornProductId Int?   @unique
+  rebornParentProductId Int?
+  rebornPriceEur Float?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   phoneSpec     PhoneSpec?
+  rebornProducts RebornProduct[]
   catalogItems  OperatorCatalogItem[]
   offers        OperatorOffer[]   @relation("PhoneModelOffers")
   artifacts     ScrapeArtifact[]  @relation("PhoneModelArtifacts")
 
   @@index([brand, series])
+  @@index([rebornParentProductId])
 }
 
 /// Typed comparison data used by `/api/phones/compare`.
@@ -176,6 +182,31 @@ model OperatorOffer {
   @@unique([operatorCatalogItemId, offerKey])
   @@index([phoneModelId, operator])
   @@index([operator])
+}
+
+/// Queryable Reborn mapping imported from the Wave API.
+model RebornProduct {
+  id                  String    @id @default(cuid())
+  phoneModelId        String
+  phoneModel          PhoneModel @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
+  productId           Int       @unique
+  parentProductId     Int?
+  isParent            Boolean   @default(false)
+  isMatched           Boolean   @default(false)
+  name                String?
+  optionText          String?
+  sku                 String?
+  priceEur            Float?
+  oldPriceEur         Float?
+  conditionStatus     String?
+  foxwayItemVariantId String?
+  purchaseStatus      Boolean?
+  active              Boolean?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([phoneModelId])
+  @@index([parentProductId])
 }
 
 model ScrapeRun {

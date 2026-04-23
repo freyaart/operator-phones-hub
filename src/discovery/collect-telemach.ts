@@ -107,6 +107,24 @@ export async function collectTelemachCatalogItems(pageSize = 12): Promise<Catalo
           brand: parsed.brand,
           series: parsed.series,
           isPhone: parsed.isPhone,
+          listingOffers:
+            product.installmentValue != null || product.upfrontFee != null
+              ? [
+                  {
+                    offerKey: 'contract',
+                    offerType: 'CONTRACT',
+                    title: 'Z vezavo',
+                    monthlyEur: product.installmentValue ?? null,
+                    initialDepositEur: product.upfrontFee ?? null,
+                    contractMonths: product.installmentPeriod ?? null,
+                    planLabel: product.packageTitle ?? null,
+                    raw: {
+                      source: 'telemach-listing-api',
+                      stickerText: group.stickerText ?? null,
+                    },
+                  },
+                ]
+              : [],
         });
       }
     }
