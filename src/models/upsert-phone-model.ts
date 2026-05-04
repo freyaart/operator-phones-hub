@@ -9,11 +9,16 @@ export type UpsertPhoneModelInput = {
   series: string;
   marketingName?: string | null;
   releaseYear?: number | null;
-  storageGb?: number | null;
+  source?: string;
   specs?: PhoneTechnicalSpecs;
   details?: Prisma.InputJsonValue;
 };
 
+/**
+ * Upsert a canonical `PhoneModel` row by slug. Used by spec importers
+ * (e.g. GSMArena) to enrich existing canonical rows. Under the Reborn-first
+ * model, canonical rows themselves are owned by `sync:reborn`.
+ */
 export async function upsertPhoneModelWithSpec(input: UpsertPhoneModelInput) {
   const phoneModel = await prisma.phoneModel.upsert({
     where: { slug: input.slug },
@@ -23,7 +28,7 @@ export async function upsertPhoneModelWithSpec(input: UpsertPhoneModelInput) {
       series: input.series,
       marketingName: input.marketingName ?? null,
       releaseYear: input.releaseYear ?? null,
-      storageGb: input.storageGb ?? null,
+      source: input.source ?? 'reborn',
       specs: input.specs === undefined ? undefined : (input.specs as Prisma.InputJsonValue),
       details: input.details,
     },
@@ -32,7 +37,7 @@ export async function upsertPhoneModelWithSpec(input: UpsertPhoneModelInput) {
       series: input.series,
       marketingName: input.marketingName ?? null,
       releaseYear: input.releaseYear ?? null,
-      storageGb: input.storageGb ?? null,
+      ...(input.source ? { source: input.source } : {}),
       specs: input.specs === undefined ? undefined : (input.specs as Prisma.InputJsonValue),
       details: input.details,
     },

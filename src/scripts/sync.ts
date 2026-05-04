@@ -4,9 +4,14 @@
  *
  * Requires Chromium: `npx playwright install chromium`
  * Skip network scrapes (stub only): `SKIP_SCRAPE=1 npm run sync`
+ *
+ * Under the Reborn-first model, sync runs over operator catalog items
+ * regardless of whether they are linked to a canonical `PhoneModel` yet.
+ * Offers always belong to the catalog item; canonical aggregation happens
+ * later via the matcher.
  */
 import type { Prisma } from '@prisma/client';
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { collectT2CatalogItems } from '../discovery/collect-t2.js';
 import { collectTelemachCatalogItems } from '../discovery/collect-telemach.js';
 import type { CatalogDiscoveryItem, CatalogDiscoveryOffer } from '../discovery/types.js';
@@ -17,8 +22,6 @@ import { stubFetchOffer } from '../sync/operators/stub.js';
 import { scrapeOperatorOffer, type SyncTarget } from '../sync/operators/index.js';
 import type { OperatorId } from '../types.js';
 import { beginScrapeRun, finishScrapeRun, addScrapeArtifact } from '../scrape/run-log.js';
-import { manualShopUrls } from '../sync/lib/phone-url.js';
-import { operatorItemKeyFromUrl, upsertOperatorCatalogItem } from '../sync/upsert-catalog-item.js';
 import type { ArtifactPayload, OperatorSyncResult } from '../sync/operators/types.js';
 
 async function syncOffersForCatalogItem(target: SyncTarget, offers: Parameters<typeof upsertOperatorOffer>[0][]) {
@@ -61,24 +64,31 @@ function createEmptyListingPhaseData(): ListingPhaseData {
   };
 }
 
-function buildTarget(item: {
-  phoneModelId: string;
+type CatalogItemRow = {
   id: string;
   operator: string;
   operatorItemKey: string;
+  phoneModelId: string | null;
   sourceUrl: string;
   displayName: string;
   variantLabel: string | null;
   color: string | null;
   storageGb: number | null;
-  phoneModel: {
-    slug: string;
-    brand: string;
-    series: string;
-    marketingName: string | null;
-    details: Prisma.JsonValue;
-  };
-}): SyncTarget {
+  parsedBrand: string | null;
+  parsedSeries: string | null;
+  parsedSlug: string | null;
+  phoneModel:
+    | {
+        slug: string;
+        brand: string;
+        series: string;
+        marketingName: string | null;
+        details: Prisma.JsonValue;
+      }
+    | null;
+};
+
+function buildTarget(item: CatalogItemRow): SyncTarget {
   return {
     phoneModelId: item.phoneModelId,
     operatorCatalogItemId: item.id,
@@ -89,14 +99,25 @@ function buildTarget(item: {
     variantLabel: item.variantLabel,
     color: item.color,
     storageGb: item.storageGb,
-    phoneModel: {
-      slug: item.phoneModel.slug,
-      brand: item.phoneModel.brand,
-      series: item.phoneModel.series,
-      marketingName: item.phoneModel.marketingName,
-      details: item.phoneModel.details,
-    },
+    parsedBrand: item.parsedBrand,
+    parsedSeries: item.parsedSeries,
+    parsedSlug: item.parsedSlug,
+    phoneModel: item.phoneModel
+      ? {
+          slug: item.phoneModel.slug,
+          brand: item.phoneModel.brand,
+          series: item.phoneModel.series,
+          marketingName: item.phoneModel.marketingName,
+          details: item.phoneModel.details,
+        }
+      : null,
   };
+}
+
+function targetIdentityLabel(target: SyncTarget): string {
+  if (target.phoneModel) return target.phoneModel.slug;
+  if (target.parsedSlug) return `${target.parsedSlug}*`;
+  return `${target.operator}:${target.operatorItemKey}`;
 }
 
 function buildOfferFromListing(
@@ -173,7 +194,11 @@ async function collectListingPhaseData(skip: boolean): Promise<ListingPhaseData>
   const data = createEmptyListingPhaseData();
   if (skip) return data;
 
-  const [t2Items, telemachItems] = await Promise.all([collectT2CatalogItems(), collectTelemachCatalogItems()]);
+  const [t2Result, telemachResult] = await Promise.allSettled([collectT2CatalogItems(), collectTelemachCatalogItems()]);
+  const t2Items = t2Result.status === 'fulfilled' ? t2Result.value : [];
+  const telemachItems = telemachResult.status === 'fulfilled' ? telemachResult.value : [];
+  if (t2Result.status === 'rejected') console.warn('Listing phase: T-2 skipped:', t2Result.reason);
+  if (telemachResult.status === 'rejected') console.warn('Listing phase: Telemach skipped:', telemachResult.reason);
   data.t2 = new Map(t2Items.map((item) => [item.operatorItemKey, item]));
   data.telemach = new Map(telemachItems.map((item) => [item.operatorItemKey, item]));
 
@@ -188,10 +213,10 @@ async function scrapeTarget(
 ): Promise<OperatorSyncResult> {
   if (process.env.SKIP_SCRAPE === '1' || !page) {
     const payload = await stubFetchOffer(operator, {
-      brand: target.phoneModel.brand,
-      series: target.phoneModel.series,
+      brand: target.phoneModel?.brand ?? target.parsedBrand ?? 'Unknown',
+      series: target.phoneModel?.series ?? target.parsedSeries ?? target.displayName,
       storageGb: target.storageGb,
-      slug: target.phoneModel.slug,
+      slug: target.phoneModel?.slug ?? target.parsedSlug ?? target.operatorItemKey,
     });
     return {
       offers: [
@@ -321,54 +346,31 @@ async function persistSyncPhaseResults(
   return { successCount, failures };
 }
 
-async function ensureManualCatalogItems() {
-  const phones = await prisma.phoneModel.findMany({
-    include: { catalogItems: true },
-    orderBy: { slug: 'asc' },
-  });
-  for (const phone of phones) {
-    const urls = manualShopUrls({
-      slug: phone.slug,
-      brand: phone.brand,
-      series: phone.series,
-      storageGb: phone.storageGb,
-      details: phone.details,
-    });
-    for (const [operator, url] of Object.entries(urls)) {
-      if (!OPERATORS.includes(operator as OperatorId)) continue;
-      await upsertOperatorCatalogItem({
-        operator,
-        operatorItemKey: operatorItemKeyFromUrl(url),
-        phoneModelId: phone.id,
-        sourceUrl: url,
-        displayName: phone.marketingName || phone.series,
-        storageGb: phone.storageGb,
-      });
-    }
-  }
-}
-
 async function main() {
   const skip = process.env.SKIP_SCRAPE === '1';
+  const listingOnly = process.env.SYNC_LISTING_ONLY === '1';
   const pdpConcurrency = Math.max(1, Number.parseInt(process.env.SYNC_PDP_CONCURRENCY ?? '3', 10) || 3);
   const dbConcurrency = Math.max(1, Number.parseInt(process.env.SYNC_DB_CONCURRENCY ?? '6', 10) || 6);
-  const browser = skip
-    ? null
-    : await chromium.launch({
-        headless: process.env.HEADFUL !== '1',
-        args: ['--disable-blink-features=AutomationControlled'],
-      });
-  const context =
-    browser &&
-    (await browser.newContext({
+  let browser: Browser | null = null;
+  let context: BrowserContext | null = null;
+
+  async function getBrowserContext() {
+    if (skip) return null;
+    if (context) return context;
+    browser = await chromium.launch({
+      headless: process.env.HEADFUL !== '1',
+      args: ['--disable-blink-features=AutomationControlled'],
+    });
+    context = await browser.newContext({
       locale: 'sl-SI',
       timezoneId: 'Europe/Ljubljana',
       userAgent:
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    }));
+    });
+    return context;
+  }
 
   try {
-    await ensureManualCatalogItems();
     const listingPhaseData = await collectListingPhaseData(skip);
     const items = await prisma.operatorCatalogItem.findMany({
       include: {
@@ -387,7 +389,7 @@ async function main() {
         : await beginScrapeRun({
             operator: op,
             runType: 'SYNC',
-            version: 'v2',
+            version: 'v3',
           });
       let processedCount = 0;
       let successCount = 0;
@@ -418,17 +420,22 @@ async function main() {
       successCount += listingPersisted.successCount;
       for (const failed of listingPersisted.failures) {
         failureCount++;
-        console.error(`\n[${op}] ${failed.result.target.phoneModel.slug}:`, failed.error);
+        console.error(`\n[${op}] ${targetIdentityLabel(failed.result.target)}:`, failed.error);
       }
 
-      const { results, failures } = await scrapeTargetsWithConcurrency(context, op, pdpTargets, pdpConcurrency);
+      const scrapeTargets = listingOnly ? [] : pdpTargets;
+      if (listingOnly && pdpTargets.length > 0) {
+        console.log(`[${op}] skipped PDP targets in SYNC_LISTING_ONLY mode: ${pdpTargets.length}`);
+      }
+      const syncContext = scrapeTargets.length > 0 ? await getBrowserContext() : null;
+      const { results, failures } = await scrapeTargetsWithConcurrency(syncContext, op, scrapeTargets, pdpConcurrency);
       processedCount += pdpTargets.length;
 
       const persisted = await persistSyncPhaseResults(results, run?.id ?? null, dbConcurrency);
       successCount += persisted.successCount;
       for (const failed of persisted.failures) {
         failureCount++;
-        console.error(`\n[${op}] ${failed.result.target.phoneModel.slug}:`, failed.error);
+        console.error(`\n[${op}] ${targetIdentityLabel(failed.result.target)}:`, failed.error);
         if (run) {
           await addScrapeArtifact({
             scrapeRunId: run.id,
@@ -445,7 +452,7 @@ async function main() {
 
       for (const failed of failures) {
         failureCount++;
-        console.error(`\n[${op}] ${failed.target.phoneModel.slug}:`, failed.error);
+        console.error(`\n[${op}] ${targetIdentityLabel(failed.target)}:`, failed.error);
         if (run) {
           await addScrapeArtifact({
             scrapeRunId: run.id,
@@ -470,8 +477,10 @@ async function main() {
       }
     }
   } finally {
-    await context?.close();
-    await browser?.close();
+    const activeContext: BrowserContext | null = context;
+    const activeBrowser: Browser | null = browser;
+    if (activeContext) await (activeContext as { close(): Promise<void> }).close();
+    if (activeBrowser) await (activeBrowser as { close(): Promise<void> }).close();
   }
 
   const finalCount = await prisma.operatorCatalogItem.count();

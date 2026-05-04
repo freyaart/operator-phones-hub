@@ -4,7 +4,8 @@ type PhoneRow = {
   slug: string;
   brand: string;
   series: string;
-  storageGb: number | null;
+  /** Optional storage hint; canonical Reborn-first rows no longer carry one. */
+  storageGb?: number | null;
   details: Prisma.JsonValue;
 };
 
@@ -62,4 +63,12 @@ export function telekomMobitelSlugs(phone: PhoneRow): string[] {
 export function searchPhrase(phone: PhoneRow): string {
   const parts = [phone.brand, phone.series, phone.storageGb != null ? `${phone.storageGb} GB` : ''].filter(Boolean);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Drop a trailing `-128gb` style suffix so we can match canonical Reborn-first slugs
+ * (which no longer carry storage in the slug).
+ */
+export function stripStorageSuffix(slug: string): string {
+  return slug.replace(/-(16|32|64|128|256|512|1024|2048)(?:-gb|gb)$/i, '');
 }

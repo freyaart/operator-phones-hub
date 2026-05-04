@@ -35,37 +35,46 @@ enum ScrapeStatus {
   FAILURE
 }
 
-/// Canonical handset row. Operator-specific sellable variants live in `OperatorCatalogItem`.
+/// State of an `OperatorCatalogItem` relative to the canonical Reborn-first catalog.
+enum MatchStatus {
+  /// No canonical model could be linked yet.
+  UNMATCHED
+  /// Linked automatically by the matcher with high confidence.
+  MATCHED_AUTO
+  /// Linked manually by an operator (override / human review).
+  MATCHED_MANUAL
+  /// Auto-matcher returned a candidate but it requires human review.
+  NEEDS_REVIEW
+}
+
+/// Canonical handset row. Now sourced from the Reborn catalog (see `RebornProduct`).
+/// Operator-specific sellable variants live in `OperatorCatalogItem` and are linked by matching.
 model PhoneModel {
   id            String   @id @default(cuid())
   brand         String
-  /// Display name without storage, e.g. "iPhone 15 Pro"
+  /// Display name without storage / color, e.g. "iPhone 15 Pro" or "Galaxy S25".
   series        String
   marketingName String?
   releaseYear   Int?
-  /// Legacy / fallback field kept for compatibility with older seed/discovery data.
-  storageGb     Int?
-  /// URL-safe canonical key, e.g. "apple-iphone-15-pro"
+  /// URL-safe canonical key without storage / color, e.g. "apple-iphone-15-pro".
   slug          String   @unique
+  /// Where the canonical row originated; defaults to "reborn" under the Reborn-first model.
+  source        String   @default("reborn")
   /// Structured technical data for comparison tables (see `PhoneTechnicalSpecs` in src).
   specs         Json?
   /// Non-technical metadata: internal SKUs, import source, Wave/Foxway ids, editorial notes.
   details       Json?
-  /// Canonical Reborn variant chosen for direct lookup/querying.
-  rebornProductId Int?   @unique
-  rebornParentProductId Int?
-  rebornPriceEur Float?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  phoneSpec     PhoneSpec?
+  phoneSpec      PhoneSpec?
   rebornProducts RebornProduct[]
-  catalogItems  OperatorCatalogItem[]
-  offers        OperatorOffer[]   @relation("PhoneModelOffers")
-  artifacts     ScrapeArtifact[]  @relation("PhoneModelArtifacts")
+  catalogItems   OperatorCatalogItem[]
+  offers         OperatorOffer[]   @relation("PhoneModelOffers")
+  artifacts      ScrapeArtifact[]  @relation("PhoneModelArtifacts")
 
   @@index([brand, series])
-  @@index([rebornParentProductId])
+  @@index([source])
 }
 
 /// Typed comparison data used by `/api/phones/compare`.
@@ -132,18 +141,32 @@ model PhoneSpec {
 }
 
 /// Operator-specific sellable item / PDP / listing reference.
+/// Lives independently of the canonical catalog; linked to `PhoneModel` via the matcher.
 model OperatorCatalogItem {
   id              String             @id @default(cuid())
   operator        String
   operatorItemKey String
-  phoneModelId    String
-  phoneModel      PhoneModel         @relation(fields: [phoneModelId], references: [id], onDelete: Cascade)
+  /// Nullable: operator items can exist before the matcher links them to a canonical model.
+  phoneModelId    String?
+  phoneModel      PhoneModel?        @relation(fields: [phoneModelId], references: [id], onDelete: SetNull)
   sourceUrl       String
   displayName     String
   variantLabel    String?
   color           String?
   storageGb       Int?
   availability    AvailabilityStatus @default(UNKNOWN)
+
+  /// Brand parsed from the operator listing (used by the matcher and for review).
+  parsedBrand     String?
+  /// Model series parsed from the operator listing (without storage / color).
+  parsedSeries    String?
+  /// Canonical-style slug parsed from the operator listing.
+  parsedSlug      String?
+  matchStatus     MatchStatus        @default(UNMATCHED)
+  matchConfidence Float?
+  matchedAt       DateTime?
+  matchedBy       String?
+
   discoveredAt    DateTime           @default(now())
   lastSeenAt      DateTime           @default(now())
 
@@ -153,13 +176,17 @@ model OperatorCatalogItem {
   @@unique([operator, operatorItemKey])
   @@index([operator, phoneModelId])
   @@index([phoneModelId])
+  @@index([matchStatus])
+  @@index([parsedSlug])
 }
 
 /// One row per operator item + offer mode (retail, contract, loyalty, ...).
+/// Always anchored to an `OperatorCatalogItem`; the canonical link is derived from the catalog item's match.
 model OperatorOffer {
   id                   String             @id @default(cuid())
-  phoneModelId         String
-  phoneModel           PhoneModel         @relation("PhoneModelOffers", fields: [phoneModelId], references: [id], onDelete: Cascade)
+  /// Mirrors the matched canonical model on the parent catalog item; nullable when unmatched.
+  phoneModelId         String?
+  phoneModel           PhoneModel?        @relation("PhoneModelOffers", fields: [phoneModelId], references: [id], onDelete: SetNull)
   operatorCatalogItemId String
   operatorCatalogItem  OperatorCatalogItem @relation("CatalogItemOffers", fields: [operatorCatalogItemId], references: [id], onDelete: Cascade)
   /// a1 | telekom | t2 | telemach
@@ -184,7 +211,9 @@ model OperatorOffer {
   @@index([operator])
 }
 
-/// Queryable Reborn mapping imported from the Wave API.
+/// Reborn catalog product imported from the Wave API.
+/// Under the Reborn-first model these rows seed `PhoneModel`; each row is one Reborn
+/// product (parent variant or color child). Storage/grade/color are parsed once on import.
 model RebornProduct {
   id                  String    @id @default(cuid())
   phoneModelId        String
@@ -196,6 +225,12 @@ model RebornProduct {
   name                String?
   optionText          String?
   sku                 String?
+  /// Parsed storage in GB (e.g. 128, 256), if recoverable from the Reborn name.
+  storageGb           Int?
+  /// Parsed color label (e.g. "Space Gray"), if available.
+  color               String?
+  /// Parsed condition grade ("A+", "A", "B", "C", ...) from the Reborn name.
+  grade               String?
   priceEur            Float?
   oldPriceEur         Float?
   conditionStatus     String?

@@ -126,9 +126,9 @@ async function main() {
     await upsertPhoneModelWithSpec({
       brand: p.brand,
       series: p.series,
-      storageGb: p.storageGb,
       slug: p.slug,
       marketingName: p.series,
+      source: 'seed',
       specs: p.specs,
       details: p.details as never,
     });

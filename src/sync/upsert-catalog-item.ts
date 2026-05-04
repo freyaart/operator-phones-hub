@@ -1,19 +1,60 @@
-import type { AvailabilityStatus, Prisma } from '@prisma/client';
+import type { AvailabilityStatus, MatchStatus, Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
+import { buildMatcherInput, matchOperatorItem } from '../matching/match-operator-item.js';
 
 export type CatalogItemPayload = {
   operator: string;
   operatorItemKey: string;
-  phoneModelId: string;
+  /**
+   * Optional canonical link. When omitted (the common case under the
+   * Reborn-first model), the matcher resolves the canonical row.
+   */
+  phoneModelId?: string | null;
   sourceUrl: string;
   displayName: string;
   variantLabel?: string | null;
   color?: string | null;
   storageGb?: number | null;
   availability?: AvailabilityStatus;
+  parsedBrand?: string | null;
+  parsedSeries?: string | null;
+  parsedSlug?: string | null;
+  /**
+   * When true (default) and `phoneModelId` is not supplied, the matcher runs
+   * synchronously and stores the resulting link + match state.
+   */
+  runMatcher?: boolean;
 };
 
-export async function upsertOperatorCatalogItem(payload: CatalogItemPayload) {
+export type UpsertCatalogItemResult = Awaited<ReturnType<typeof prisma.operatorCatalogItem.upsert>>;
+
+export async function upsertOperatorCatalogItem(payload: CatalogItemPayload): Promise<UpsertCatalogItemResult> {
+  let phoneModelId: string | null | undefined = payload.phoneModelId ?? null;
+  let matchStatus: MatchStatus = phoneModelId ? 'MATCHED_MANUAL' : 'UNMATCHED';
+  let matchConfidence: number | null = phoneModelId ? 1 : null;
+  let matchedBy: string | null = phoneModelId ? 'manual-upsert' : null;
+  let matchedAt: Date | null = phoneModelId ? new Date() : null;
+
+  const shouldRunMatcher =
+    payload.runMatcher !== false && !payload.phoneModelId && (payload.parsedBrand || payload.parsedSlug);
+
+  if (shouldRunMatcher) {
+    const decision = await matchOperatorItem(
+      buildMatcherInput({
+        parsedBrand: payload.parsedBrand ?? null,
+        parsedSeries: payload.parsedSeries ?? null,
+        parsedSlug: payload.parsedSlug ?? null,
+        storageGb: payload.storageGb ?? null,
+        displayName: payload.displayName,
+      }),
+    );
+    phoneModelId = decision.phoneModelId;
+    matchStatus = decision.matchStatus;
+    matchConfidence = decision.matchConfidence;
+    matchedBy = decision.matchedBy;
+    matchedAt = decision.phoneModelId ? new Date() : null;
+  }
+
   return prisma.operatorCatalogItem.upsert({
     where: {
       operator_operatorItemKey: {
@@ -24,22 +65,49 @@ export async function upsertOperatorCatalogItem(payload: CatalogItemPayload) {
     create: {
       operator: payload.operator,
       operatorItemKey: payload.operatorItemKey,
-      phoneModelId: payload.phoneModelId,
+      phoneModelId: phoneModelId ?? null,
       sourceUrl: payload.sourceUrl,
       displayName: payload.displayName,
       variantLabel: payload.variantLabel ?? null,
       color: payload.color ?? null,
       storageGb: payload.storageGb ?? null,
       availability: payload.availability ?? 'UNKNOWN',
+      parsedBrand: payload.parsedBrand ?? null,
+      parsedSeries: payload.parsedSeries ?? null,
+      parsedSlug: payload.parsedSlug ?? null,
+      matchStatus,
+      matchConfidence,
+      matchedBy,
+      matchedAt,
     },
     update: {
-      phoneModelId: payload.phoneModelId,
       sourceUrl: payload.sourceUrl,
       displayName: payload.displayName,
       variantLabel: payload.variantLabel ?? null,
       color: payload.color ?? null,
       storageGb: payload.storageGb ?? null,
       availability: payload.availability ?? 'UNKNOWN',
+      parsedBrand: payload.parsedBrand ?? null,
+      parsedSeries: payload.parsedSeries ?? null,
+      parsedSlug: payload.parsedSlug ?? null,
+      // Preserve manual matches; never overwrite them from a discovery upsert.
+      ...(payload.phoneModelId !== undefined
+        ? {
+            phoneModelId: payload.phoneModelId,
+            matchStatus,
+            matchConfidence,
+            matchedBy,
+            matchedAt,
+          }
+        : shouldRunMatcher
+          ? {
+              phoneModelId,
+              matchStatus,
+              matchConfidence,
+              matchedBy,
+              matchedAt,
+            }
+          : {}),
       lastSeenAt: new Date(),
     },
   });

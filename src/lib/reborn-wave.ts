@@ -33,6 +33,28 @@ export type RebornWaveLookupResult = {
   groups: RebornWaveGroup[];
 };
 
+const REBORN_QUERY_NOISE_WORDS = [
+  'ultramarin',
+  'titan',
+  'pescena',
+  'temno',
+  'porcelan',
+  'jade',
+  'iris',
+  'polnocno',
+  'kavno',
+  'sivka',
+  'mornarsko',
+  'fog',
+  'frost',
+  'crno',
+  'blescece',
+  'modra',
+  'senca',
+];
+
+const REBORN_STORAGE_HINTS = new Set(['4', '6', '8', '12', '16', '24', '32', '64', '128', '256', '512']);
+
 function getBaseUrl(): string | null {
   const base = process.env.REBORN_WAVE_API_URL?.trim() || '';
   if (!base) return null;
@@ -56,7 +78,7 @@ function isTooThinModelName(value: string): boolean {
   return /^\d+[a-z]?$/i.test(normalized);
 }
 
-function buildModelQuery(phone: PhoneLookup): string {
+export function getRebornWaveModelQuery(phone: PhoneLookup): string {
   const brand = normalizeWords(phone.brand);
   const series = normalizeWords(phone.series);
   const marketingName = normalizeWords(phone.marketingName ?? '');
@@ -70,17 +92,37 @@ function buildModelQuery(phone: PhoneLookup): string {
   return includesBrand ? base : `${brand} ${base}`.trim();
 }
 
-export function hasRebornWaveApiConfigured(): boolean {
-  return getBaseUrl() != null;
+function getRebornWaveFallbackModelQuery(modelQuery: string): string | null {
+  const words = normalizeWords(modelQuery)
+    .split(' ')
+    .map((word) => (word.toLowerCase() === 'xl' ? 'XL' : word));
+
+  const filtered = words.filter((word, index) => {
+    const lower = word.toLowerCase();
+
+    if (REBORN_QUERY_NOISE_WORDS.includes(lower)) return false;
+    if (lower === '5g' || lower === '4g') return false;
+    if (/^\d+(?:gb|tb|mb)$/i.test(word)) return false;
+    if (/^\d+$/.test(word) && index > 1 && REBORN_STORAGE_HINTS.has(word)) return false;
+    return true;
+  });
+
+  const simplified = normalizeWords(filtered.join(' ').replace(/\bproplus\b/gi, 'Pro Plus'));
+  return simplified && simplified !== modelQuery ? simplified : null;
 }
 
-export async function fetchRebornWaveProducts(phone: PhoneLookup): Promise<RebornWaveLookupResult | null> {
-  const base = getBaseUrl();
-  if (!base) return null;
+function getRebornWaveModelQueries(phone: PhoneLookup): string[] {
+  const primary = getRebornWaveModelQuery(phone);
+  const fallback = getRebornWaveFallbackModelQuery(primary);
+  return fallback ? [primary, fallback] : [primary];
+}
 
-  const modelQuery = buildModelQuery(phone);
+async function lookupRebornWaveQuery(
+  base: string,
+  phone: PhoneLookup,
+  modelQuery: string,
+): Promise<RebornWaveLookupResult | null> {
   const url = getLookupUrl(base, modelQuery);
-
   const response = await fetch(url, {
     headers: {
       'user-agent':
@@ -103,4 +145,55 @@ export async function fetchRebornWaveProducts(phone: PhoneLookup): Promise<Rebor
     modelQuery: data.query ?? modelQuery,
     groups: data.groups,
   };
+}
+
+export function hasRebornWaveApiConfigured(): boolean {
+  return getBaseUrl() != null;
+}
+
+export async function fetchRebornWaveProducts(phone: PhoneLookup): Promise<RebornWaveLookupResult | null> {
+  const base = getBaseUrl();
+  if (!base) return null;
+
+  for (const modelQuery of getRebornWaveModelQueries(phone)) {
+    const result = await lookupRebornWaveQuery(base, phone, modelQuery);
+    if (result) return result;
+  }
+
+  return null;
+}
+
+/**
+ * Brand-level seed queries used when discovering the entire Reborn catalog
+ * (Reborn-first sync). The Wave API only takes a `query` parameter, so the
+ * Reborn catalog has to be fanned out across coarse brand probes.
+ */
+export const REBORN_BRAND_SEED_QUERIES: string[] = [
+  'Apple',
+  'Samsung',
+  'Google',
+  'Xiaomi',
+  'Huawei',
+  'Honor',
+  'OnePlus',
+  'Motorola',
+  'Realme',
+  'Nothing',
+  'Oppo',
+  'Doro',
+  'Sony',
+  'ZTE',
+  'Asus',
+];
+
+/**
+ * Run a single Reborn lookup with a free-form query (no phone slug).
+ * Used by the Reborn-first catalog importer.
+ */
+export async function fetchRebornWaveByQuery(query: string): Promise<RebornWaveLookupResult | null> {
+  const base = getBaseUrl();
+  if (!base) return null;
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+  return lookupRebornWaveQuery(base, { slug: `query:${trimmed}`, brand: '', series: trimmed, marketingName: null }, trimmed);
 }

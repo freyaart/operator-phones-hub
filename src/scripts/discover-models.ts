@@ -1,5 +1,11 @@
 /**
- * Discover canonical phone models plus operator-specific catalog items.
+ * Operator-side discovery: ingest operator catalog items only.
+ *
+ * Under the Reborn-first model the canonical catalog is owned by `sync:reborn`,
+ * so this script no longer creates `PhoneModel` rows. Each discovered listing
+ * becomes an `OperatorCatalogItem` with parsed brand/series/slug fields, and
+ * the matcher in `src/matching/match-operator-item.ts` resolves the canonical
+ * link (or leaves it `UNMATCHED` for review).
  *
  *   npm run discover
  *   npm run discover -- --sources=telekom
@@ -11,9 +17,7 @@ import { collectTelekomCatalogItems } from '../discovery/collect-telekom.js';
 import { collectA1CatalogItems } from '../discovery/collect-a1.js';
 import { collectT2CatalogItems } from '../discovery/collect-t2.js';
 import { collectTelemachCatalogItems } from '../discovery/collect-telemach.js';
-import { mergeDiscoveryDetails } from '../discovery/merge-details.js';
 import type { CatalogDiscoveryItem } from '../discovery/types.js';
-import { upsertPhoneModelWithSpec } from '../models/upsert-phone-model.js';
 import { beginScrapeRun, finishScrapeRun, addScrapeArtifact } from '../scrape/run-log.js';
 import { upsertOperatorCatalogItem } from '../sync/upsert-catalog-item.js';
 
@@ -43,35 +47,24 @@ async function upsertDiscoveredItem(item: CatalogDiscoveryItem, dryRun: boolean,
     return;
   }
 
-  const existing = await prisma.phoneModel.findUnique({ where: { slug: item.canonicalSlug } });
-  const details = mergeDiscoveryDetails(existing?.details, {
-    shopUrl: { operator: item.operator, url: item.sourceUrl },
-    importTag: `${item.operator}-listing`,
-  });
-  const phoneModel = await upsertPhoneModelWithSpec({
-    slug: item.canonicalSlug,
-    brand: item.brand,
-    series: item.series,
-    marketingName: item.series,
-    details,
-  });
-
   const catalogItem = await upsertOperatorCatalogItem({
     operator: item.operator,
     operatorItemKey: item.operatorItemKey,
-    phoneModelId: phoneModel.id,
     sourceUrl: item.sourceUrl,
     displayName: item.displayName,
     variantLabel: item.variantLabel,
     color: item.color,
     storageGb: item.storageGb,
     availability: item.availability,
+    parsedBrand: item.brand,
+    parsedSeries: item.series,
+    parsedSlug: item.canonicalSlug,
   });
 
   await addScrapeArtifact({
     scrapeRunId,
     operator: item.operator,
-    phoneModelId: phoneModel.id,
+    phoneModelId: catalogItem.phoneModelId ?? null,
     operatorCatalogItemId: catalogItem.id,
     artifactType: 'listing-card',
     sourceUrl: item.sourceUrl,
@@ -82,6 +75,9 @@ async function upsertDiscoveredItem(item: CatalogDiscoveryItem, dryRun: boolean,
       storageGb: item.storageGb,
       color: item.color,
       availability: item.availability,
+      matchStatus: catalogItem.matchStatus,
+      matchedBy: catalogItem.matchedBy,
+      matchConfidence: catalogItem.matchConfidence,
     },
   });
 }
@@ -96,7 +92,7 @@ async function processSource(
     : await beginScrapeRun({
         operator,
         runType: 'DISCOVER',
-        version: 'v2',
+        version: 'v3',
         metadata: { discoveredCount: items.length },
       });
   let successCount = 0;
@@ -143,17 +139,22 @@ async function main() {
       .filter(Boolean)
   );
 
-  const browser = await chromium.launch({
-    headless: process.env.HEADFUL !== '1',
-    args: ['--disable-blink-features=AutomationControlled'],
-  });
-  const context = await browser.newContext({
-    locale: 'sl-SI',
-    timezoneId: 'Europe/Ljubljana',
-    userAgent:
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  });
-  const page = await context.newPage();
+  const needsBrowser = sources.has('telekom') || sources.has('a1');
+  const browser = needsBrowser
+    ? await chromium.launch({
+        headless: process.env.HEADFUL !== '1',
+        args: ['--disable-blink-features=AutomationControlled'],
+      })
+    : null;
+  const context = browser
+    ? await browser.newContext({
+        locale: 'sl-SI',
+        timezoneId: 'Europe/Ljubljana',
+        userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      })
+    : null;
+  const page = context ? await context.newPage() : null;
 
   let telekomCount = 0;
   let a1Count = 0;
@@ -162,6 +163,7 @@ async function main() {
 
   try {
     if (sources.has('telekom')) {
+      if (!page) throw new Error('Telekom discovery requires a browser page');
       const items = await collectTelekomCatalogItems(page);
       telekomCount = items.length;
       console.log(`Telekom: ${items.length} catalog items`);
@@ -169,6 +171,7 @@ async function main() {
     }
 
     if (sources.has('a1')) {
+      if (!page) throw new Error('A1 discovery requires a browser page');
       const items = await collectA1CatalogItems(page);
       a1Count = items.length;
       console.log(`A1: ${items.length} catalog items`);
@@ -189,13 +192,20 @@ async function main() {
       await processSource('telemach', items, dryRun);
     }
   } finally {
-    await context.close();
-    await browser.close();
+    await context?.close();
+    await browser?.close();
   }
 
   if (!dryRun) {
-    const total = await prisma.phoneModel.count();
-    console.log(`Done. PhoneModel rows in DB: ${total}`);
+    const [totalItems, matched, needsReview, unmatched] = await Promise.all([
+      prisma.operatorCatalogItem.count(),
+      prisma.operatorCatalogItem.count({ where: { matchStatus: { in: ['MATCHED_AUTO', 'MATCHED_MANUAL'] } } }),
+      prisma.operatorCatalogItem.count({ where: { matchStatus: 'NEEDS_REVIEW' } }),
+      prisma.operatorCatalogItem.count({ where: { matchStatus: 'UNMATCHED' } }),
+    ]);
+    console.log(
+      `Done. OperatorCatalogItem rows: ${totalItems} (matched=${matched}, needsReview=${needsReview}, unmatched=${unmatched})`,
+    );
   } else {
     console.log(
       `Dry run: telekom URLs=${telekomCount}, a1 paths=${a1Count}, t2 items=${t2Count}, telemach items=${telemachCount} (no DB writes)`,

@@ -2,7 +2,8 @@ import { prisma } from '../db.js';
 import type { AvailabilityStatus, OfferType, Prisma } from '@prisma/client';
 
 export type OfferPayload = {
-  phoneModelId: string;
+  /** Optional canonical link; mirrors the matched catalog item. */
+  phoneModelId?: string | null;
   operatorCatalogItemId: string;
   operator: string;
   offerKey: string;
@@ -28,7 +29,7 @@ export async function upsertOperatorOffer(payload: OfferPayload) {
       },
     },
     create: {
-      phoneModelId: payload.phoneModelId,
+      phoneModelId: payload.phoneModelId ?? null,
       operatorCatalogItemId: payload.operatorCatalogItemId,
       operator: payload.operator,
       offerKey: payload.offerKey,
@@ -45,6 +46,7 @@ export async function upsertOperatorOffer(payload: OfferPayload) {
       raw: payload.raw,
     },
     update: {
+      phoneModelId: payload.phoneModelId ?? null,
       title: payload.title ?? null,
       offerType: payload.offerType ?? 'OTHER',
       retailPriceEur: payload.retailPriceEur ?? null,

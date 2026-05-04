@@ -3,7 +3,8 @@ const STORAGE = new Set([32, 64, 128, 256, 512, 1024]);
 const COLOR_SUFFIX =
   /-(crna|bela|crn|black|white|modra|zelena|siva|grafitna|mentol|cosmic(?:-orange)?|titan|orange|plavi|vijoli|zlata|transparent|obsidian|mix|vijolicna|nebesno|nebesko(?:-modra)?|kobaltno(?:-vijolicna)?|ledeno(?:-modra)?|mornarsko(?:-modra)?|senca|blescece|izjemna(?:-temno-siva)?|dark(?:-blue|-green)?|light|natural|platinum|space|midnight|starlight|blue|green|purple|pink|gold|prozorno|violet|lavender|titanium|alpine|graphite|sierra|pacific|slate|cream|coral|lavanda|grey|gray|sky-blue|mint|silver|srebrna|belo|peach|rose|golden)(?:-\d+)?$/i;
 
-const NON_PHONE_HINT = /(watch|kiddo|tab-|tablet|ipad|buds|airpods|case|ovitek|mapa|etui|zascit|glass|steklo|polnilec|charger|cable|kabel)/i;
+const NON_PHONE_HINT =
+  /(watch|kiddo|tab-|tablet|ipad|buds|airpods|case|ovitek|mapa|etui|zascit|glass|steklo|polnilec|charger|cable|kabel|adapter|baterija|dect|slusalke|drzalo|lokator|avdio|gigaset|yealink)/i;
 
 const BRAND_SLUG: Record<string, string> = {
   Apple: 'apple',
@@ -54,6 +55,18 @@ function extractColorSlug(slug: string): string | null {
   return match[1].toLowerCase();
 }
 
+function stripVariantNoise(slug: string): string {
+  return slug
+    .replace(
+      /(iphone-\d+(?:-pro-max|-pro|-plus|-e)?)-(\d{1,2})-(\d{2,4})(?:-gb|gb)(?=-|$)/gi,
+      '$1-$3gb',
+    )
+    .replace(/-(4g|5g|lte|dual|sim|esim)(?=-|$)/gi, '')
+    .replace(/-(black|white|teal|ultramarine|natural|desert|titanium|silver|srebrna|bela|crna|crn|moder|modra|roza|zelena|siva|sivka|zajbelj|megleno|globoko|kozmicno)(?=-|$)/gi, '')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function humanizeToken(w: string): string {
   if (w === '5g' || w === '4g') return w.toUpperCase();
   if (/^iphone/i.test(w)) return w.replace(/^i/, 'I');
@@ -78,7 +91,7 @@ export function slugifyCatalogText(input: string): string {
 }
 
 export function humanizeSeries(slug: string, brand: string): string {
-  let s = slug.toLowerCase().replace(/#/g, '');
+  let s = stripVariantNoise(slug.toLowerCase().replace(/#/g, ''));
   const st = extractStorageGb(s);
   if (st) {
     s = s.replace(new RegExp(`-${st}-gb`, 'i'), '');
@@ -143,7 +156,7 @@ export function parseCatalogSlug(pathSegment: string): ParsedCatalogDevice {
   const brand = inferBrand(variantSlug);
   const storageGb = extractStorageGb(variantSlug);
   const color = extractColorSlug(variantSlug);
-  let canonicalCore = variantSlug;
+  let canonicalCore = stripVariantNoise(variantSlug);
   if (storageGb) {
     canonicalCore = canonicalCore.replace(new RegExp(`-${storageGb}-gb`, 'i'), '');
     canonicalCore = canonicalCore.replace(new RegExp(`-${storageGb}gb`, 'i'), '');
