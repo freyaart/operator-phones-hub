@@ -1,23 +1,11 @@
 {
-  "buildCommand": "npm install --include=dev && npm run build",
-  "crons": [
-    {
-      "path": "/api/jobs/reborn",
-      "schedule": "0 */12 * * *"
-    },
-    {
-      "path": "/api/jobs/discover",
-      "schedule": "15 2 * * *"
-    },
-    {
-      "path": "/api/jobs/sync",
-      "schedule": "0 */4 * * *"
-    }
-  ]
-}
-{
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install --include=dev",
   "buildCommand": "npx prisma generate && npm run build",
-  "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "crons": [
+    { "path": "/api/jobs/reborn", "schedule": "0 */12 * * *" },
+    { "path": "/api/jobs/discover", "schedule": "15 2 * * *" },
+    { "path": "/api/jobs/sync", "schedule": "0 */4 * * *" }
+  ]
 }
